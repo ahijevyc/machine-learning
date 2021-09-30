@@ -38,10 +38,10 @@ def get_2021HWTcsv(debug=False):
     searchpath = "/glade/scratch/ahijevyc/track_data_ncarstorm_3km_REFL_COM_hyst_csv/track_step*_d01_20*.csv"
     df = pd.concat([pd.read_csv(f, header=0, index_col="Step_ID", parse_dates=["Run_Date","Valid_Date"]) for f in glob.glob(searchpath)])
     df = df.sort_values(["Run_Date", "Forecast_Hour"])
-    df = scalar2vector.decompose_circ_feature(df, "orientation", debug=debug)
+    df = scalar2vector.decompose_circ_feature(df, "orientation", scale2rad=2., debug=debug)
     df.loc[:,"Local_Solar_Hour"] = df["Valid_Hour_UTC"] + df["Centroid_Lon"]/15.
     df = scalar2vector.decompose_circ_feature(df, "Local_Solar_Hour", scale2rad=2.*np.pi/24., debug=debug) # orientation cycles at pi, not 2*pi
-    df = scalar2vector.scalar2vector(df)
+    df = scalar2vector.uvmagnitude(df)
     return df
 
 def get_features(suite=None):
@@ -237,8 +237,8 @@ def main():
     test_indices = ~train_indices
     df["split"] = "train"
     df.loc[test_indices,"split"] = "test"
-    print(f"{train_indices.sum()} ({100.*train_indices.sum()/len(df):.0f}%) training cases < {train_test_split_time}")
-    print(f"{test_indices.sum()} ({100.*test_indices.sum()/len(df):.0f}%) test cases >= {train_test_split_time}")
+    print(f"{train_indices.sum()} ({100.*train_indices.sum()/len(df):.0f}%) training cases Valid_Date < {train_test_split_time}")
+    print(f"{test_indices.sum()} ({100.*test_indices.sum()/len(df):.0f}%) test cases Valid_Date >= {train_test_split_time}")
 
     labels = df['label'].astype("category")
     labels = labels.cat.reorder_categories(["Q1", "Q2", "S1", "S2", "S3", "D1", "D2"], ordered=True)
