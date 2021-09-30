@@ -9,21 +9,24 @@ import datetime as dt
 import sys, os, pickle, time
 from scipy.ndimage.filters import gaussian_filter
 import pandas as pd
-from mpl_toolkits.basemap import *
+#from mpl_toolkits.basemap import *
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
-from keras.models import Model, save_model, load_model
-from keras.layers import Dense, Activation, Conv2D, Input, AveragePooling2D, Flatten, LeakyReLU
-from keras.layers import Dropout, BatchNormalization
-from keras.regularizers import l2
-from keras.optimizers import SGD, Adam
-import keras.backend as K
 import tensorflow as tf
+from tensorflow.keras import layers, Input
+from tensorflow.keras.models import Model, save_model, load_model
+from tensorflow.keras.layers import Dense, Activation, Conv2D, AveragePooling2D, Flatten
+from tensorflow.keras.layers import Dropout, BatchNormalization
+from tensorflow.keras.regularizers import l2
+from tensorflow.keras.optimizers import SGD, Adam
+from tensorflow.keras import backend as K
 from scipy import spatial
 
 from ml_functions import read_csv_files, normalize_multivariate_data, log, get_features
+
+import pdb
 
 def readNCLcm(name):
     '''Read in NCL colormap for use in matplotlib'''
@@ -47,14 +50,10 @@ def brier_score_keras(obs, preds):
 def brier_skill_score_keras(obs, preds):
     climo = K.mean((obs - K.mean(obs)) ** 2)
     bs = brier_score_keras(obs, preds)
-    ratio = (bs / climo)
-    return climo
+    return 1.0 - (bs / climo)
 
-def auc(obs, preds):
-    auc = tf.metrics.auc(obs, preds)[1]
-    K.get_session().run(tf.local_variables_initializer()) #is this needed?
-    return auc
 
+# Can't use bss as training metric because it passes a Tensor to NumPy call, which is not supported
 def bss(obs, preds):
     bs = np.mean((preds - obs) ** 2)
     climo = np.mean((obs - np.mean(obs)) ** 2)
@@ -158,39 +157,38 @@ def init_neural_network():
     K.set_session(session)
 
 def train_neural_network():
-    dense_model = None
-    
+    # Discard any pre-existing version of the model.
+    model = None
+    model = tf.keras.models.Sequential()
+
     # Input layer
-    dense_in = Input(shape=norm_in_data.shape[1:])
+    model.add(Input(shape=norm_in_data.shape[1:]))
 
     # Hidden layers
     for n in range(0,nn_params['num_layers']):
         # First hidden layer
-        dense = Dense(nn_params['num_neurons'][n], kernel_regularizer=l2())(dense_in)
-        dense = Activation("relu")(dense)
-        dense = Dropout(nn_params['dropout'])(dense)
-        dense = BatchNormalization()(dense)
+        model.add(Dense(nn_params['num_neurons'][n], kernel_regularizer=l2()))
+        model.add(Activation("relu"))
+        model.add(Dropout(nn_params['dropout']))
+        model.add(BatchNormalization())
 
     # Output layer
-    dense = Dense(numclasses)(dense)
-    dense = Activation("sigmoid")(dense)
-
-    # Creates a model object that links input layer and output
-    dense_model = Model(dense_in, dense)
+    model.add(Dense(numclasses))
+    model.add(Activation("sigmoid"))
 
     # Optimizer object
     opt_dense = SGD(lr=nn_params['lr'], momentum=0.99, decay=1e-4, nesterov=True)
 
-    # Compile model with optimizer and loss function
-    if multiclass: dense_model.compile(opt_dense, loss="binary_crossentropy", metrics=[brier_score_keras, brier_skill_score_keras, auc])
-    else: dense_model.compile(opt_dense, loss="mse", metrics=[brier_score_keras, brier_skill_score_keras, auc])
+    # Compile model with optimizer and loss function. MSE is same as brier_score.
+    if multiclass: model.compile(opt_dense, loss="binary_crossentropy", metrics=[tf.keras.metrics.MeanSquaredError(), brier_skill_score_keras, tf.keras.metrics.AUC()])
+    else: model.compile(opt_dense, loss="mse", metrics=[brier_score_keras, brier_skill_score_keras, auc])
 
     # Train model
-    dense_hist = dense_model.fit(norm_in_data[train_indices], labels[train_indices],
-                             batch_size=1024, epochs=nn_params['num_epochs'], verbose=1)
-                             #validation_data=(norm_in_data[test_indices], labels[test_indices]))
+    history = model.fit(norm_in_data[train_indices], labels[train_indices],
+                         batch_size=1024, epochs=nn_params['num_epochs'], verbose=1) #,
+#                         validation_data=(norm_in_data[test_indices], labels[test_indices])) 
 
-    return (dense_hist, dense_model)
+    return (history, model)
 
 def make_labels():
     #labels   = ((df['hail_rptdist'+twin] < d) & (df['hail_rptdist'+twin] > 0)) |  \
@@ -239,6 +237,8 @@ def print_scores(fcst, obs, rptclass):
 
 ### NEURAL NETWORK PARAMETERS ###
 
+latlon_hash_bucket_size = int(sys.argv[4])
+
 nn_params = { 'num_layers': 1, 'num_neurons': [ 1024 ], 'dropout': 0.1, 'lr': 0.001, 'num_epochs': 10, \
               'report_window_space':[ int(sys.argv[1]) ], 'report_window_time':[ int(sys.argv[2]) ] }
 
@@ -249,12 +249,12 @@ years         =  [2011,2012,2013,2014,2015,2016] #k-fold cross validation for th
 #years         =  [ int(sys.argv[3]) ]
 model         =  'nn'
 
-train         =  False
-predict       =  True 
+train         =  True
+predict       =  False
 plot          =  False
 
 multiclass    =  True
-output_stats  =  False 
+output_stats  =  False
 thin_data     =  True
 thin_fraction =  0.9999
 smooth_probs  =  False
@@ -262,18 +262,19 @@ smooth_sigma  =  1
 simple_features = True
 
 dataset = 'NSC1km'
-#dataset = 'NSC3km-12sec'
+dataset = 'NSC3km-12sec'
 #dataset = 'RT2020'
 scaling_dataset = 'NSC3km-12sec'
-scaling_dataset = 'NSC1km'
 mem = 10
 
-#trained_models_dir = '/glade/work/sobash/NSC_objects'
 trained_models_dir = '/glade/work/sobash/NSC_objects/trained_models'
-#trained_models_dir = '/glade/work/sobash/NSC_objects/trained_models_paper'
+trained_models_dir = '/glade/work/sobash/NSC_objects'
+trained_models_dir = '/glade/work/sobash/NSC_objects/trained_models_paper'
+trained_models_dir = '/glade/work/ahijevyc/NSC_objects'
 
 sdate   = dt.datetime(2010,1,1,0,0,0)
 edate   = dt.datetime(2017,12,31,0,0,0)
+#edate   = dt.datetime(2011,1,31,0,0,0) #TODO remove
 dateinc = dt.timedelta(days=1)
 
 ##################################
@@ -283,7 +284,7 @@ else: numclasses = 1
 twin = "_%dhr"%nn_params['report_window_time'][0]
 
 # get list of features
-features = get_features('all')
+features = get_features('basic')
 
 log('Number of features %d'%len(features))
 log(nn_params)
@@ -295,22 +296,40 @@ type_dict = {}
 for f in features: type_dict[f]='float32'
 df, numfcsts = read_csv_files(sdate, edate, dataset)
 
+lat_x_lon_features = None
+if latlon_hash_bucket_size > 0:
+    longitude = tf.feature_column.bucketized_column(tf.feature_column.numeric_column("lon"), np.arange(int(df.lon.min()), int(df.lon.max()), 1.0).tolist())
+    latitude = tf.feature_column.bucketized_column(tf.feature_column.numeric_column("lat"), np.arange(int(df.lat.min()), int(df.lat.max()), 1.0).tolist())
+    latitude_x_longitude = tf.feature_column.crossed_column([latitude,longitude], hash_bucket_size=latlon_hash_bucket_size)
+    crossed_feature = tf.feature_column.indicator_column(latitude_x_longitude)
+    if False:
+        # : read somewhere that keeping original 1-D features is good. crossed features have hashes that can collide.
+        features.remove('lat')
+        features.remove('lon')
+    lat_x_lon_feature_layer = layers.DenseFeatures(crossed_feature)
+    lat_x_lon_features = lat_x_lon_feature_layer(df[["lon","lat"]].to_dict(orient='list')).numpy().astype("int") # astype("int") maybe? make things faster?
+    lat_x_lon_features = pd.DataFrame(lat_x_lon_features)
+
 if train:
     log('Training Begin')
-    init_neural_network()
 
     # normalize data if training a neural network, output scaling values
     if model == 'nn':
         if os.path.exists('scaling_values_all_%s.pk'%scaling_dataset):
             scaling_values = pickle.load(open('scaling_values_all_%s.pk'%scaling_dataset, 'rb'))
-            norm_in_data, scaling_values = normalize_multivariate_data(df[features].values.astype(np.float32), features, scaling_values=scaling_values)
+            # TODO: does df[features].values.astype(np.float32) cut down on memory usage?
+            norm_in_data, scaling_values = normalize_multivariate_data(df, features, scaling_values=scaling_values)
         else:
-            norm_in_data, scaling_values = normalize_multivariate_data(df[features].values.astype(np.float32), features, scaling_values=None)
+            norm_in_data, scaling_values = normalize_multivariate_data(df, features, scaling_values=None)
             pickle.dump(scaling_values, open('scaling_values_all_%s.pk'%(scaling_dataset), 'wb'))
 
     for d in nn_params['report_window_space']:
         labels = make_labels()
             
+        # Add crossed feature columns to df and norm_in_data.
+        # concatenate crossed features to DataFrame
+        if latlon_hash_bucket_size > 0:
+            df = pd.concat([df.reset_index(drop=True), lat_x_lon_features], axis=1)
         # train on random subset of examples (to speed up processing)
         if thin_data and model == 'rf':
             df, df_test, labels, labels_test = train_test_split(df, labels, train_size=thin_fraction, random_state=10)
@@ -331,7 +350,7 @@ if train:
                 dense_hist, dense_model = train_neural_network()
 
                 log('Writing model') 
-                model_fname = '%s/neural_network_%s_%dkm%s_nn%d_drop%.1f_NSC1km_v2.h5'%(trained_models_dir,year,d,twin,nn_params['num_neurons'][0],nn_params['dropout'])
+                model_fname = '%s/neural_network_%s_%dkm%s_nn%d_drop%.1f_%dlatlon_hash_buckets_ep10.h5'%(trained_models_dir,year,d,twin,nn_params['num_neurons'][0],nn_params['dropout'],latlon_hash_bucket_size)
                 dense_model.save(model_fname)
 
             if model == 'rf':
@@ -354,7 +373,7 @@ if predict:
         #norm_in_data, scaling_values = normalize_multivariate_data(df[features].values.astype(np.float32), features, scaling_values=None)
         #pickle.dump(scaling_values, open('scaling_values_all_%s.pk'%(scaling_dataset), 'wb'))
         scaling_values = pickle.load(open('scaling_values_all_%s.pk'%scaling_dataset, 'rb'))
-        norm_in_data, scaling_values = normalize_multivariate_data(df[features].values.astype(np.float32), features, scaling_values=scaling_values)
+        norm_in_data, scaling_values = normalize_multivariate_data(df, features, scaling_values=scaling_values)
 
     for d in nn_params['report_window_space']:
         labels = make_labels()
@@ -367,10 +386,6 @@ if predict:
            
             if year == 2020: model_year = 2016 #use 2016 model that left out 2016 for 2020 predictions
             else: model_year = year
-            
-            # output UH01 values for this year to use for comparison to ML forecasts
-            if d == 40 and twin == '_2hr': uh01_120_all        = np.append(uh01_120_all, df[forecast_mask]['UP_HELI_MAX01-N1T5'].values, axis=0)
-            if d == 120 and twin == '_2hr': uh01_120_all        = np.append(uh01_120_all, df[forecast_mask]['UP_HELI_MAX01-120-N1T5'].values, axis=0)
  
             log('Making predictions for %d forecasts in %d'%(forecast_mask.values.sum(), year))
             if model == 'nn':
@@ -378,10 +393,10 @@ if predict:
                 this_in_data = norm_in_data[forecast_mask,:] 
  
                 dense_model = None
-                model_fname = '%s/neural_network_%s_%dkm%s_nn%d_drop%.1f_NSC1km_v2.h5'%(trained_models_dir,model_year,d,twin,nn_params['num_neurons'][0],nn_params['dropout'])
-                log('Training using %s'%model_fname)
+                model_fname = '%s/neural_network_%s_%dkm%s_nn%d_drop%.1f_%dlatlon_hash_buckets_ep10.h5'%(trained_models_dir,year,d,twin,nn_params['num_neurons'][0],nn_params['dropout'],latlon_hash_bucket_size)
+                log('Predicting using %s'%model_fname)
                 if not os.path.exists(model_fname): continue
-                dense_model = load_model(model_fname, custom_objects={'brier_score_keras': brier_score_keras, 'brier_skill_score_keras':brier_skill_score_keras, 'auc':auc })
+                dense_model = load_model(model_fname, custom_objects={'brier_score_keras': tf.keras.metrics.MeanSquaredError(), 'brier_skill_score_keras':brier_skill_score_keras, 'auc':tf.keras.metrics.AUC()})
             
                 predictions = dense_model.predict(this_in_data)
 
@@ -414,18 +429,22 @@ if predict:
             if d == 40 and twin == '_2hr': uh120_all        = np.append(uh120_all, df[forecast_mask]['UP_HELI_MAX-N1T5'].values, axis=0)
             if d == 80 and twin == '_2hr': uh120_all        = np.append(uh120_all, df[forecast_mask]['UP_HELI_MAX80-N1T5'].values, axis=0)
             if d == 120 and twin == '_2hr': uh120_all        = np.append(uh120_all, df[forecast_mask]['UP_HELI_MAX120-N1T5'].values, axis=0)
-          
+            
+            if d == 40 and twin == '_2hr': uh01_120_all        = np.append(uh01_120_all, df[forecast_mask]['UP_HELI_MAX01-N1T5'].values, axis=0)
+            if d == 120 and twin == '_2hr': uh01_120_all        = np.append(uh01_120_all, df[forecast_mask]['UP_HELI_MAX01-120-N1T5'].values, axis=0)
+
             date_all        = np.append(date_all, df[forecast_mask]['Date'].values, axis=0)
+
+            print(uh01_120_all.shape, year)     
  
         log('Verifying %d forecast points'%predictions_all.shape[0])
-        #classes = { 0:'all', 1:'wind', 2:'hailone', 3:'torn', 4:'sighail', 5:'sigwind'}
-        #for i in range(numclasses):
-        #    print_scores(predictions_all[:,i], labels_all[:,i], classes[i])
+        classes = { 0:'all', 1:'wind', 2:'hailone', 3:'torn', 4:'sighail', 5:'sigwind'}
+        for i in range(numclasses):
+            print_scores(predictions_all[:,i], labels_all[:,i], classes[i])
        
         # dump predictions 
         pickle.dump([predictions_all, labels_all.astype(np.bool), fhr_all.astype(np.int8), cape_all.astype(np.int16), shear_all.astype(np.int16), \
-                     uh_all.astype(np.float32), uh120_all.astype(np.float32), date_all], \
-                     open('predictions_%s_%dkm%s'%(model,nn_params['report_window_space'][0],twin), 'wb'))
+                     uh_all.astype(np.float32), uh120_all.astype(np.float32), uh01_120_all.astype(np.float32), date_all], \
+                     open('predictions_%s_%dkm%s_NSC3km_basic'%(model,nn_params['report_window_space'][0],twin), 'wb'))
 
-        pickle.dump(uh01_120_all.astype(np.float32), open('predictions_%s_%dkm%s_uh01'%(model,nn_params['report_window_space'][0],twin), 'wb'))
 
