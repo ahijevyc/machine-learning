@@ -1,26 +1,26 @@
 #!/usr/bin/env python
 
-import pdb
-from netCDF4 import Dataset
-import numpy as np
+import argparse
+import cartopy.crs
 from datetime import *
-import time, os, sys
-import scipy.ndimage as ndimage
+import matplotlib.pyplot as plt
+import metpy 
+import metpy.calc as mcalc
+from metpy.units import units
+from mpl_toolkits.basemap import Basemap
+import numpy as np
 import os
+import pdb
 import pickle as pickle
-import multiprocessing
-from mpl_toolkits.basemap import *
-from scipy import spatial
 import s3fs
 import scipy.ndimage.filters
-import matplotlib.colors as colors
-import matplotlib.pyplot as plt
+from scipy import spatial
+import sys
 import xarray
 
 
 ### THIS CODE EVOLVED FROM CODE WITHIN /glade/u/home/sobash/NSC_scripts
 ### TO UPSCALE 3-KM CAM DATA TO AN 80-KM GRID
-
 
 def get_closest_gridbox():
     ### find closest 3-km or 1-km grid point to each 80-km grid point
@@ -28,90 +28,190 @@ def get_closest_gridbox():
     if os.path.exists(gpfname):
         nngridpts = pickle.load(open(gpfname, 'rb'), encoding='bytes')
     else:
-        # INTERPOLATE NARR TO 80KM GRID
-        #fig, axes, m  = pickle.load(open('/glade/u/home/wrfrt/rt_ensemble_2018wwe/python_scripts/rt2015_CONUS.pk', 'r'))
+        print('finding closest grid points')
+        # INTERPOLATE TO 80KM GRID
         awips = Basemap(projection='lcc', llcrnrlon=-133.459, llcrnrlat=12.19, urcrnrlon=-49.38641, urcrnrlat=57.2894, lat_1=25.0, lat_2=25.0, lon_0=-95, resolution=None, area_thresh=10000.)
         grid81 = awips.makegrid(93, 65, returnxy=True)
         x81, y81 = awips(grid81[0], grid81[1])
         #x81 = (x[1:,1:] + x[:-1,:-1])/2.0
         #y81 = (y[1:,1:] + y[:-1,:-1])/2.0
 
-        if model.startswith('HRRR'):
-            f = Dataset('/glade/work/ahijevyc/share/HRRR.nc')
-            lats = f.variables['gridlat_0'][:]
-            lons = f.variables['gridlon_0'][:]
-            f.close()
-        else:
-            if model == 'NSC1km': f = Dataset('/glade/p/mmm/parc/sobash/NSC/1KM_WRF_POST/2011062500/diags_d01_2011-06-25_00_00_00.nc', 'r')
-            if model == 'NSC3km-12sec': f = Dataset('/glade/p/mmm/parc/sobash/NSC/3KM_WRF_POST_12sec_ts/2011062500/diags_d01_2011-06-25_00_00_00.nc', 'r')
-            if model == 'GEFS': f = Dataset('/glade/scratch/sobash/ncar_ens/gefs_ics/2017042500/wrf_rundir/ens_1/diags_d02.2017-04-25_00:00:00.nc', 'r')
-            if model == 'RT2020': f = Dataset('/glade/p/mmm/parc/sobash/NSC/3KM_WRF_POST_12sec_ts/2011062500/diags_d01_2011-06-25_00_00_00.nc', 'r')
-            lats = f.variables['XLAT'][0,:]
-            lons = f.variables['XLONG'][0,:]
-            f.close()
-        xy = awips(lons.ravel(), lats.ravel())
+        f = xarray.open_dataset('/glade/work/ahijevyc/share/HRRR.nc')
+        lats = f['gridlat_0']
+        lons = f['gridlon_0']
+        f.close()
+        xy = awips(lons.values.ravel(), lats.values.ravel())
         tree = spatial.KDTree(list(zip(xy[0].ravel(),xy[1].ravel())))
         nngridpts = tree.query(list(zip(x81.ravel(),y81.ravel())))
         pickle.dump(nngridpts, open(gpfname, 'wb'))
 
     return nngridpts
 
-def upscale_forecast(upscaled_field_list):
-    if False: # coordinates not needed now
-        level, variable = upscaled_field_list[0]
-        # first url without the last level subdirectory has time and projection_x_coordinate and forecast_period and forecast_reference_time
-        urls = [os.path.join('s3://hrrrzarr/sfc', tdate.strftime("%Y%m%d/%Y%m%d_%Hz_fcst.zarr"), level, variable)]
-    fs = s3fs.S3FileSystem(anon=True)
-    urls=[]
-    for (level, variable) in upscaled_field_list:
-        urls.append( os.path.join('s3://hrrrzarr/sfc', tdate.strftime("%Y%m%d/%Y%m%d_%Hz_fcst.zarr"), level, variable, level) )
-    ds = xarray.open_mfdataset([s3fs.S3Map(url, s3=fs) for url in urls], engine='zarr') # Tried parallel=True, but not significantly faster
-    print(ds)
-    upscaled_fields = {}
-    for this_field, da in ds.data_vars.items():
-        da = da.astype(float) # avoid *** RuntimeError: array type dtype('float16') not supported from scipy.ndimage
-        # use maximum for certain fields, mean for others 
-        if this_field in ['UP_HELI_MAX', 'UP_HELI_MAX03', 'UP_HELI_MAX01', 'W_UP_MAX', 'W_DN_MAX', 'WSPD10MAX', 'HAILCAST_DIAM_MAX']:
-            field = scipy.ndimage.filters.maximum_filter(da, size=(1,27,27), mode='nearest')
-        else:
-            field = scipy.ndimage.filters.uniform_filter(da, size=(1,27,27), mode='nearest')
-        field_interp = np.empty((ds.time.size,65,93))
-        for t,_ in enumerate(field):
-            field_interp[t] = field[t].flatten()[nngridpts[1]].reshape((65,93))
-        upscaled_fields[this_field] = field_interp
-    ds.close()
+def scipyfilt(da):
+    this_field = da.name
+    print(f"upscaling {this_field}")
+    da = da.astype(np.float32) # avoid *** RuntimeError: array type dtype('float16') not supported from scipy.ndimage
+    # use maximum for certain fields, mean for others 
+    if this_field in ['MAXUVV_1hr_max_fcst', 'MAXREF_1hr_max_fcst', 'WIND_1hr_max_fcst', 'MXUPHL_1hr_max_fcst', 'HAIL_1hr_max_fcst']: 
+        field = scipy.ndimage.filters.maximum_filter(da, size=(1,27,27), mode='reflect') # default mode='reflect' (d c b a | a b c d | d c b a) The input is extended by reflecting about the edge of the last pixel. This mode is also sometimes referred to as half-sample symmetric
+    elif this_field in ['MAXDVV_1hr_max_fcst', 'MNUPHL_1hr_min_fcst']:
+        field = scipy.ndimage.filters.minimum_filter(da, size=(1,27,27))
+    else:
+        field = scipy.ndimage.filters.uniform_filter(da, size=(1,27,27))
+    field_interp = np.empty((da.time.size,65,93))
+    for t,_ in enumerate(field):
+        field_interp[t] = field[t].flatten()[nngridpts[1]].reshape((65,93))
+    ds = xarray.Dataset(data_vars={this_field:(da.dims,field_interp)})
+    ds[this_field].attrs.update(da.attrs)
+    return ds
 
-    return upscaled_fields
+def long_name_upscale(ds): # how to handle multiple levels with same variable name
+    # rename dataarray so it includes the level. 
+    # Otherwise, ValueError: Could not find any dimension coordinates to use to order the datasets for concatenation.
+    # If you have two CAPEs from different levels. 
+    # use long_name attribute instead. It has the level and name.
+    # for example: CAPE -> 0_3000m_above_ground/CAPE or CAPE -> surface/CAPE
+    # Don't try to rename forecast time variables
+    assert 'forecast_period' not in ds.data_vars
+    for da in ds:
+        long_name = ds[da].attrs['long_name']
+        ds = ds.rename({da:long_name})
+        return scipyfilt(ds[long_name])
+
+def upscale_forecast(upscaled_field_list,nngridpts,debug=False):
+
+    # Open HRRR-ZARR forecasts and return xarray Dataset.
+    # Ignores analysis fhr=0 (_anl.zarr).
+
+    fs = s3fs.S3FileSystem(anon=True)
+
+
+    level, variable = upscaled_field_list[0]
+    # url without final level subdirectory has time, projection_x_coordinate, forecast_period, and forecast_reference_time
+    coord_url = os.path.join('s3://hrrrzarr/sfc', sdate.strftime("%Y%m%d/%Y%m%d_%Hz_fcst.zarr"), level, variable)
+    coord_ds = xarray.open_dataset(s3fs.S3Map(coord_url, s3=fs), engine='zarr')
+    coord_ds = coord_ds.drop(labels=["projection_x_coordinate", "projection_y_coordinate"]) # will be wrong after upscaling
+    urls = [os.path.join('s3://hrrrzarr/sfc', sdate.strftime("%Y%m%d/%Y%m%d_%Hz_fcst.zarr"), level, variable, level) for (level, variable) in upscaled_field_list]
+    if debug:
+        # One at a time to find cause of zarr.errors.GroupNotFoundError: group not found at path ''
+        # usually a typo in url
+        for url in urls:
+            print(f"getting {url}")
+            ds = xarray.open_dataset(s3fs.S3Map(url, s3=fs), engine='zarr') 
+    print(f"opening {len(urls)} {model} urls, {len(coord_ds.time)} forecast times")
+    # if parallel=True and nvars>19 on casper, RuntimeError: can't start new thread. 
+    # casperexec run times with 50 vars
+    # ncpus   runtime 
+    #   1       3:00
+    #   2       2:00
+    #   3       1:45
+    #   4       1:43
+    #   5       1:40
+    #   6       2:45
+    #  10       6:00
+    #  20     >10:00
+    ds = xarray.open_mfdataset([s3fs.S3Map(url, s3=fs) for url in urls], engine='zarr', preprocess=long_name_upscale, parallel=True)
+    ds = ds.merge(coord_ds)
+   
+    if debug:
+        fig, ax = plt.subplots(ncols=2)
+        itime = 18
+        vmin, vmax = da.load().quantile([0.02, 0.98])
+        ax[0].imshow(da.isel(time=itime), vmin=vmin, vmax=vmax)
+        ax[1].imshow(field_interp[itime], vmin=vmin, vmax=vmax)
+        plt.show()
+        #plt.savefig(f"{this_field}.png")
+        plt.close(fig=fig)
+
+    return ds
 
 sdate = datetime.strptime(sys.argv[1], '%Y%m%d%H')
-tdate = sdate
-model = sys.argv[2]
-
+model = 'HRRR-ZARR'
+debug = False
 odir = "/glade/work/" + os.getenv("USER") 
 
-upscaled_fields = { 'UP_HELI_MAX':[], 'UP_HELI_MAX03':[], 'UP_HELI_MAX01':[], 'W_UP_MAX':[], 'W_DN_MAX':[], 'WSPD10MAX':[], 'STP':[], 'LR75':[], 'CAPESHEAR':[],
-           'MUCAPE':[], 'SBCAPE':[], 'SBCINH':[], 'MLCINH':[], 'MLLCL':[], 'SHR06': [], 'SHR01':[], 'SRH01':[], 'SRH03':[], 'T2':[], 'TD2':[], 'PSFC':[], 'PREC_ACC_NC':[], \
-           'HAILCAST_DIAM_MAX':[], \
-           'T925':[], 'T850':[], 'T700':[], 'T500':[], 'TD925':[], 'TD850':[], 'TD700':[], 'TD500':[], 'U925':[], 'U850':[], 'U700':[], 'U500':[], 'V925':[], 'V850':[], 'V700':[], 'V500':[], \
-           'UP_HELI_MAX80':[], 'UP_HELI_MAX120':[], 'UP_HELI_MAX01-120':[] }
-press_levels = [1000,925,850,700,600,500,400,300,250,200,150,100]
-
-upscaled_fields = { 'UP_HELI_MAX01-120':[] }
-
 # get closest grid boxes
-print('finding closest grid points')
 nngridpts = get_closest_gridbox()
 
-upscaled_fields = [
-        ("surface","HAIL_1hr_max_fcst"),
-        ("surface", "PRATE"),
+upscaled_field_list = [
+        ("0_1000m_above_ground", "VUCSH"),
+        ("0_1000m_above_ground", "VVCSH"),
+        ("0_3000m_above_ground", "CAPE"), # no 0_3000m_above_ground/CIN. CAPE truncated at 3000m AGL, or low-level CAPE?
+        ("0_6000m_above_ground", "VUCSH"),
+        ("0_6000m_above_ground", "VVCSH"),
+        ("0C_isotherm", "HGT"),
+        ("100_1000mb_above_ground", "MAXDVV_1hr_max_fcst"),
+        ("100_1000mb_above_ground", "MAXUVV_1hr_max_fcst"),
+        ("1000_0m_above_ground", "HLCY"),
+        ("1000_0m_above_ground", "RELV_1hr_max_fcst"),
+        ("1000m_above_ground", "MAXREF_1hr_max_fcst"),
+        ("1000m_above_ground", "REFD"),
+        ("10m_above_ground", "MAXUW_1hr_max_fcst"),
+        ("10m_above_ground", "MAXVW_1hr_max_fcst"),
+        ("10m_above_ground", "WIND_1hr_max_fcst"),
+        #("180_0mb_above_ground", "CAPE"), # Associated with Best(4-layer) Lifted Index. So I don't think this is mucape or mlcape.
+        #("180_0mb_above_ground", "CIN"),  # Associated with Best(4-layer) Lifted Index. So I don't think this is mucape or mlcape.
+        ("255_0mb_above_ground", "CAPE"), # mucape
+        ("255_0mb_above_ground", "CIN"), # mucin
+        ("2m_above_ground", "DPT"),
+        ("2m_above_ground", "SPFH"),
+        ("2m_above_ground", "TMP"),
         ("3000_0m_above_ground", "HLCY"),
+        ("3000_0m_above_ground", "MNUPHL_1hr_min_fcst"),
+        ("3000_0m_above_ground", "MXUPHL_1hr_max_fcst"),
+        ("4000m_above_ground", "REFD"),
+        ("500mb", "DPT"),
+        ("500mb", "HGT"),
+        ("500mb", "TMP"),
+        ("500mb", "UGRD"),
+        ("500mb", "VGRD"),
         ("5000_2000m_above_ground", "MXUPHL_1hr_max_fcst"),
         ("5000_2000m_above_ground", "MNUPHL_1hr_min_fcst"),
+        ("700mb", "DPT"),
+        ("700mb", "HGT"),
+        ("700mb", "TMP"),
+        ("700mb", "UGRD"),
+        ("700mb", "VGRD"),
+        ("850mb", "DPT"),
+        ("850mb", "TMP"),
+        ("850mb", "UGRD"),
+        ("850mb", "VGRD"),
+        ("90_0mb_above_ground", "CAPE"), # mlcape
+        ("90_0mb_above_ground", "CIN"), # mlcinh
+        ("925mb", "DPT"),
+        ("925mb", "TMP"),
+        ("925mb", "UGRD"),
+        ("925mb", "VGRD"),
+        ("entire_atmosphere", "HAIL_1hr_max_fcst"),
+        ("entire_atmosphere", "REFC"),
+        ("entire_atmosphere_single_layer", "TCOLG_1hr_max_fcst"),
+        ("level_of_adiabatic_condensation_from_sfc", "HGT"),
+        ("surface", "APCP_1hr_acc_fcst"),
+        ("surface", "CAPE"),
+        ("surface", "CIN"),
+        ("surface", "HAIL_1hr_max_fcst"),
+        ("surface", "PRES"),
+        ("surface", "PRATE")
         ]
 
-upscaled_fields = upscale_forecast(upscaled_fields)
+fields_are_unique = len(set(upscaled_field_list)) == len(upscaled_field_list)
+assert fields_are_unique, set([x for x in upscaled_field_list if upscaled_field_list.count(x) > 1])
 
-ofile = f'{odir}/NSC/%s_%s_upscaled'%(sdate.strftime('%Y%m%d%H'),model)
-np.savez_compressed(ofile, a=upscaled_fields)
-print("saved", f"{os.path.realpath(ofile)}.npz")
+upscaled_fields = upscale_forecast(upscaled_field_list,nngridpts,debug=debug).astype(np.float16) # convert to np.float16. that's what HRRR-ZARR is stored in
+upscaled_fields = upscaled_fields.metpy.quantify()
+
+# Derive fields
+upscaled_fields["0_1000m_above_ground/VSH"] = (upscaled_fields["0_1000m_above_ground/VUCSH"]**2 + upscaled_fields["0_1000m_above_ground/VVCSH"]**2)**0.5 * units["1/s"] # warned mesowest about VUCSH and VVCSH not having units 
+upscaled_fields["0_6000m_above_ground/VSH"] = (upscaled_fields["0_6000m_above_ground/VUCSH"]**2 + upscaled_fields["0_6000m_above_ground/VVCSH"]**2)**0.5 * units["1/s"] # warned mesowest about VUCSH and VVCSH not having units 
+upscaled_fields["STP"] = mcalc.significant_tornado(upscaled_fields["surface/CAPE"], upscaled_fields["level_of_adiabatic_condensation_from_sfc/HGT"],
+        upscaled_fields["1000_0m_above_ground/HLCY"], 6*units["km"]*upscaled_fields["0_6000m_above_ground/VSH"])
+upscaled_fields["LR75"] = ( upscaled_fields["500mb/TMP"] - upscaled_fields["700mb/TMP"] ) / ( upscaled_fields["500mb/HGT"] - upscaled_fields["700mb/HGT"] )
+upscaled_fields["CAPESHEAR"] = upscaled_fields["0_6000m_above_ground/VSH"] * upscaled_fields["90_0mb_above_ground/CAPE"] #mlcape
+
+
+
+# parquet
+ofile = f'{odir}/NSC/%s_{model}_upscaled.par'%(sdate.strftime('%Y%m%d%H'))
+upscaled_fields.to_dataframe().to_parquet(ofile)
+#np.savez_compressed(ofile, a=upscaled_fields.to_dict())
+print("saved", f"{os.path.realpath(ofile)}")
