@@ -395,15 +395,16 @@ def main():
         pdb.set_trace()
 
     if rf:
-        print("rf_"+savedmodel)
-        if not clobber and os.path.exists("rf_"+savedmodel):
+        rf_savedmodel = "rf/rf_"+savedmodel
+        print(rf_savedmodel)
+        if not clobber and os.path.exists(rf_savedmodel):
             print("loading saved rf")
-            rf = joblib.load("rf_"+savedmodel)
+            rf = joblib.load(rf_savedmodel)
         else:
             rf = RandomForestClassifier(n_estimators=200, max_depth=50, min_samples_split=2, oob_score=True, criterion="gini", random_state=None, n_jobs=-1)
             rf.fit(norm_in_data[train_indices], onehotlabels[train_indices])
-        if clobber or not os.path.exists("rf_"+savedmodel):
-            joblib.dump(rf, "rf_"+savedmodel)
+        if clobber or not os.path.exists(rf_savedmodel):
+            joblib.dump(rf, rf_savedmodel)
         #scores = cross_val_score(rf, norm_in_data, onehotlabels, cv=5)
         y_pred = rf.predict(norm_in_data[test_indices])
         print(vx_tble(labels, onehotlabels[test_indices], y_pred))
@@ -413,6 +414,6 @@ def main():
         norm_in_data = (df[features] - scaler.loc["mean"] ) / scaler.loc["std"]
         print('done normalizing')
         preds = rf.predict(norm_in_data)
-        df.join(pd.DataFrame(preds, index=df.index, columns=encoder.classes_)).to_csv(f"rf_{savedmodel}.csv")
+        df.join(pd.DataFrame(preds, index=df.index, columns=encoder.classes_)).to_csv(f"{rf_savedmodel}.csv")
 if __name__ == "__main__":
     main()
