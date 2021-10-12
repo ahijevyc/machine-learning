@@ -65,7 +65,7 @@ def scipyfilt(da):
     ds[this_field].attrs.update(da.attrs)
     return ds
 
-def long_name_upscale(ds): # how to handle multiple levels with same variable name
+def rename_upscale(ds): # how to handle multiple levels with same variable name
     # rename dataarray so it includes the level. 
     # Otherwise, ValueError: Could not find any dimension coordinates to use to order the datasets for concatenation.
     # If you have two CAPEs from different levels. 
@@ -110,17 +110,18 @@ def upscale_forecast(upscaled_field_list,nngridpts,debug=False):
     #   6       2:45
     #  10       6:00
     #  20     >10:00
-    ds = xarray.open_mfdataset([s3fs.S3Map(url, s3=fs) for url in urls], engine='zarr', preprocess=long_name_upscale, parallel=True)
+    ds = xarray.open_mfdataset([s3fs.S3Map(url, s3=fs) for url in urls], engine='zarr', preprocess=rename_upscale, parallel=True)
 
     # Swap forecast_period with time coordinate so output files may be concatenated along forecast_reference_time and aligned along forecast_period.
     coord_ds = coord_ds.swap_dims({"time": "forecast_period"})
     ds = ds.rename({"time":"forecast_period"}).merge(coord_ds) # Rename "time" "forecast_period" and merge with coord_ds.
    
     if debug:
+        da = ds["surface/CAPE"]
         fig, ax = plt.subplots(ncols=2)
         itime = 18
         vmin, vmax = da.load().quantile([0.02, 0.98])
-        ax[0].imshow(da.isel(time=itime), vmin=vmin, vmax=vmax)
+        ax[0].imshow(da.isel(forecast_period=itime), vmin=vmin, vmax=vmax)
         ax[1].imshow(field_interp[itime], vmin=vmin, vmax=vmax)
         plt.show()
         #plt.savefig(f"{this_field}.png")
@@ -133,14 +134,19 @@ parser = argparse.ArgumentParser(description = "Read HRRR-ZARR, upscale, save", 
 parser.add_argument("sdate", type=str, help='start date YYYYMMDDHH format')
 parser.add_argument("--clobber", action="store_true", help='clobber existing output')
 parser.add_argument("--debug", action="store_true", help='debug mode')
+parser.add_argument("--npz", action="store_true", help='save compressed numpy file')
+parser.add_argument("--parquet", action="store_true", help='save parquet file')
 args = parser.parse_args()
 
 clobber = args.clobber
 debug   = args.debug
+npz     = args.npz
+parquet = args.parquet
+
 sdate   = datetime.strptime(args.sdate, '%Y%m%d%H')
 model   = 'HRRR-ZARR'
 odir    = "/glade/work/" + os.getenv("USER") 
-ofile   = f'{odir}/NSC_objects/HRRR/%s_{model}_upscaled.par'%(sdate.strftime('%Y%m%d%H'))
+ofile   = f'{odir}/NSC_objects/HRRR/%s_{model}_upscaled.nc'%(sdate.strftime('%Y%m%d%H'))
 if os.path.exists(ofile) and not clobber:
     print(ofile, "already exists. Exiting. Use --clobber option to override")
     sys.exit(1)
@@ -230,10 +236,40 @@ if derive_fields:
     upscaled_fields = upscaled_fields.metpy.dequantify()
 
 
-# parquet
+
+
+# Save upscaled data to file. There are tradeoffs to each format.
+# .npz is fast and efficient but no names or labels.
+# parquet has variable names and coordinate names and can write half-precision (2-byte) floats, like HRRR-ZARR, but no long_name or units.
+# netCDF can't handle np.float16, or slash characters in variable names, but it handles np.float32 (twice the filesize of parquet).
+# netCDF has named variables, coordinates, long_names and units.
+# Use netcdf but strip masked pts for efficiency.
+
+# Caveat: forecast_reference_time must remain 64-bit, so set aside before converting Dataset to np.float32.
 forecast_reference_time = upscaled_fields["forecast_reference_time"]
-upscaled_fields = upscaled_fields.astype(np.float16) # revert to np.float16 for less disk space, same precision as source. Caveat: changes forecast_reference_time to Inf. Oh well. Already assigned forecast_period to time coordinate, and forecast_reference_time is part of filename.
+upscaled_fields = upscaled_fields.astype(np.float32) # less disk space. HRRR-ZARR was even less precise, with np.float16, but to_netcdf() needs np.float32. 
 upscaled_fields["forecast_reference_time"] = forecast_reference_time
-upscaled_fields.to_dataframe(dim_order=["forecast_period","projection_y_coordinate","projection_x_coordinate"]).to_parquet(ofile) # put y before x coordinate so dataframe doesn't have to be transposed before plotting
-#np.savez_compressed(ofile, a=upscaled_fields.to_dict())
+
+# Stack x and y into 1-D pts coordinate
+upscaled_fields = upscaled_fields.stack(pts=("projection_y_coordinate","projection_x_coordinate"))
+
+# Drop masked pts before saving--reduces file size by 75%
+mask = pickle.load(open('/glade/u/home/sobash/2013RT/usamask.pk','rb'))
+upscaled_fields.coords["mask"] = (("pts"), mask)
+# reset multi-index level "pts" or NotImplementedError: isna is not defined for MultiIndex from .to_dataframe().to_parquet(). Also, to_netcdf() can't save MultiIndex.
+upscaled_fields = upscaled_fields.where(upscaled_fields.mask, drop=True).reset_index("pts")
+
+root, ext = os.path.splitext(ofile)
+if parquet:
+    ds = upscaled_fields.astype(np.float16)
+    ds["forecast_reference_time"] = forecast_reference_time
+    ds.to_dataframe().to_parquet(root+".par")
+if npz:
+    ds = upscaled_fields.astype(np.float16)
+    ds["forecast_reference_time"] = forecast_reference_time
+    np.savez_compressed(root+".npz", a=ds.to_dict())
+
+# Change slash to hyphen for netcdf variable names
+upscaled_fields = upscaled_fields.rename_vars({x:x.replace("/","-") for x in upscaled_fields.data_vars})
+upscaled_fields.to_netcdf(ofile)
 print("saved", f"{os.path.realpath(ofile)}")
