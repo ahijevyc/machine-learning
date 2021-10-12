@@ -11,7 +11,7 @@ from mpl_toolkits.basemap import Basemap
 import numpy as np
 import os
 import pdb
-import pickle as pickle
+import pickle
 import s3fs
 import scipy.ndimage.filters
 from scipy import spatial
@@ -90,7 +90,7 @@ def upscale_forecast(upscaled_field_list,nngridpts,debug=False):
     # url without final level subdirectory has time, projection_x_coordinate, forecast_period, and forecast_reference_time
     coord_url = os.path.join('s3://hrrrzarr/sfc', sdate.strftime("%Y%m%d/%Y%m%d_%Hz_fcst.zarr"), level, variable)
     coord_ds = xarray.open_dataset(s3fs.S3Map(coord_url, s3=fs), engine='zarr')
-    coord_ds = coord_ds.drop(labels=["projection_x_coordinate", "projection_y_coordinate"]) # will be wrong after upscaling
+    coord_ds = coord_ds.drop(labels=["projection_x_coordinate", "projection_y_coordinate"]) # projection coordinates will be different after upscaling
     urls = [os.path.join('s3://hrrrzarr/sfc', sdate.strftime("%Y%m%d/%Y%m%d_%Hz_fcst.zarr"), level, variable, level) for (level, variable) in upscaled_field_list]
     if debug:
         # One at a time to find cause of zarr.errors.GroupNotFoundError: group not found at path ''
@@ -111,7 +111,10 @@ def upscale_forecast(upscaled_field_list,nngridpts,debug=False):
     #  10       6:00
     #  20     >10:00
     ds = xarray.open_mfdataset([s3fs.S3Map(url, s3=fs) for url in urls], engine='zarr', preprocess=long_name_upscale, parallel=True)
-    ds = ds.merge(coord_ds)
+
+    # Swap forecast_period with time coordinate so output files may be concatenated along forecast_reference_time and aligned along forecast_period.
+    coord_ds = coord_ds.swap_dims({"time": "forecast_period"})
+    ds = ds.rename({"time":"forecast_period"}).merge(coord_ds) # Rename "time" "forecast_period" and merge with coord_ds.
    
     if debug:
         fig, ax = plt.subplots(ncols=2)
@@ -125,10 +128,23 @@ def upscale_forecast(upscaled_field_list,nngridpts,debug=False):
 
     return ds
 
-sdate = datetime.strptime(sys.argv[1], '%Y%m%d%H')
-model = 'HRRR-ZARR'
-debug = False
-odir = "/glade/work/" + os.getenv("USER") 
+# =============Arguments===================
+parser = argparse.ArgumentParser(description = "Read HRRR-ZARR, upscale, save", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser.add_argument("sdate", type=str, help='start date YYYYMMDDHH format')
+parser.add_argument("--clobber", action="store_true", help='clobber existing output')
+parser.add_argument("--debug", action="store_true", help='debug mode')
+args = parser.parse_args()
+
+clobber = args.clobber
+debug   = args.debug
+sdate   = datetime.strptime(args.sdate, '%Y%m%d%H')
+model   = 'HRRR-ZARR'
+odir    = "/glade/work/" + os.getenv("USER") 
+ofile   = f'{odir}/NSC_objects/HRRR/%s_{model}_upscaled.par'%(sdate.strftime('%Y%m%d%H'))
+if os.path.exists(ofile) and not clobber:
+    print(ofile, "already exists. Exiting. Use --clobber option to override")
+    sys.exit(1)
+
 
 # get closest grid boxes
 nngridpts = get_closest_gridbox()
@@ -136,7 +152,7 @@ nngridpts = get_closest_gridbox()
 upscaled_field_list = [
         ("0_1000m_above_ground", "VUCSH"),
         ("0_1000m_above_ground", "VVCSH"),
-        ("0_3000m_above_ground", "CAPE"), # no 0_3000m_above_ground/CIN. CAPE truncated at 3000m AGL, or low-level CAPE?
+        #("0_3000m_above_ground", "CAPE"), # no 0_3000m_above_ground/CIN. CAPE truncated at 3000m AGL, or low-level CAPE?
         ("0_6000m_above_ground", "VUCSH"),
         ("0_6000m_above_ground", "VVCSH"),
         ("0C_isotherm", "HGT"),
@@ -149,8 +165,8 @@ upscaled_field_list = [
         ("10m_above_ground", "MAXUW_1hr_max_fcst"),
         ("10m_above_ground", "MAXVW_1hr_max_fcst"),
         ("10m_above_ground", "WIND_1hr_max_fcst"),
-        #("180_0mb_above_ground", "CAPE"), # Associated with Best(4-layer) Lifted Index. So I don't think this is mucape or mlcape.
-        #("180_0mb_above_ground", "CIN"),  # Associated with Best(4-layer) Lifted Index. So I don't think this is mucape or mlcape.
+        #("180_0mb_above_ground", "CAPE"), # Associated with Best(4-layer) Lifted Index. not mucape or mlcape.
+        #("180_0mb_above_ground", "CIN"),  # Associated with Best(4-layer) Lifted Index. not mucape or mlcape.
         ("255_0mb_above_ground", "CAPE"), # mucape
         ("255_0mb_above_ground", "CIN"), # mucin
         ("2m_above_ground", "DPT"),
@@ -197,21 +213,27 @@ upscaled_field_list = [
 fields_are_unique = len(set(upscaled_field_list)) == len(upscaled_field_list)
 assert fields_are_unique, set([x for x in upscaled_field_list if upscaled_field_list.count(x) > 1])
 
-upscaled_fields = upscale_forecast(upscaled_field_list,nngridpts,debug=debug).astype(np.float16) # convert to np.float16. that's what HRRR-ZARR is stored in
-upscaled_fields = upscaled_fields.metpy.quantify()
+upscaled_fields = upscale_forecast(upscaled_field_list,nngridpts,debug=debug)
 
-# Derive fields
-upscaled_fields["0_1000m_above_ground/VSH"] = (upscaled_fields["0_1000m_above_ground/VUCSH"]**2 + upscaled_fields["0_1000m_above_ground/VVCSH"]**2)**0.5 * units["1/s"] # warned mesowest about VUCSH and VVCSH not having units 
-upscaled_fields["0_6000m_above_ground/VSH"] = (upscaled_fields["0_6000m_above_ground/VUCSH"]**2 + upscaled_fields["0_6000m_above_ground/VVCSH"]**2)**0.5 * units["1/s"] # warned mesowest about VUCSH and VVCSH not having units 
-upscaled_fields["STP"] = mcalc.significant_tornado(upscaled_fields["surface/CAPE"], upscaled_fields["level_of_adiabatic_condensation_from_sfc/HGT"],
-        upscaled_fields["1000_0m_above_ground/HLCY"], 6*units["km"]*upscaled_fields["0_6000m_above_ground/VSH"])
-upscaled_fields["LR75"] = ( upscaled_fields["500mb/TMP"] - upscaled_fields["700mb/TMP"] ) / ( upscaled_fields["500mb/HGT"] - upscaled_fields["700mb/HGT"] )
-upscaled_fields["CAPESHEAR"] = upscaled_fields["0_6000m_above_ground/VSH"] * upscaled_fields["90_0mb_above_ground/CAPE"] #mlcape
-
+derive_fields = len(upscaled_fields) > 10 # may have incomplete short list for debugging
+if derive_fields:
+    upscaled_fields = upscaled_fields.metpy.quantify() 
+    print("Derive fields")
+    upscaled_fields["0_1000m_above_ground/VSH"] = (upscaled_fields["0_1000m_above_ground/VUCSH"]**2 + upscaled_fields["0_1000m_above_ground/VVCSH"]**2)**0.5 * units["m/s"] # warned mesowest about VUCSH and VVCSH not having units 
+    upscaled_fields["0_6000m_above_ground/VSH"] = (upscaled_fields["0_6000m_above_ground/VUCSH"]**2 + upscaled_fields["0_6000m_above_ground/VVCSH"]**2)**0.5 * units["m/s"] # warned mesowest about VUCSH and VVCSH not having units 
+    # TODO: fix level_of_adiabatic_condensation_from_sfc/HGT. They are all NaN. I emailed James Powell at atmos-mesowest@lists.utah.edu
+    print(upscaled_fields["level_of_adiabatic_condensation_from_sfc/HGT"].to_dataframe().describe())
+    upscaled_fields["STP"] = mcalc.significant_tornado(upscaled_fields["surface/CAPE"], upscaled_fields["level_of_adiabatic_condensation_from_sfc/HGT"],
+            upscaled_fields["1000_0m_above_ground/HLCY"], upscaled_fields["0_6000m_above_ground/VSH"])
+    upscaled_fields["LR75"] = ( upscaled_fields["500mb/TMP"] - upscaled_fields["700mb/TMP"] ) / ( upscaled_fields["500mb/HGT"] - upscaled_fields["700mb/HGT"] )
+    upscaled_fields["CAPESHEAR"] = upscaled_fields["0_6000m_above_ground/VSH"] * upscaled_fields["90_0mb_above_ground/CAPE"] #mlcape
+    upscaled_fields = upscaled_fields.metpy.dequantify()
 
 
 # parquet
-ofile = f'{odir}/NSC/%s_{model}_upscaled.par'%(sdate.strftime('%Y%m%d%H'))
-upscaled_fields.to_dataframe().to_parquet(ofile)
+forecast_reference_time = upscaled_fields["forecast_reference_time"]
+upscaled_fields = upscaled_fields.astype(np.float16) # revert to np.float16 for less disk space, same precision as source. Caveat: changes forecast_reference_time to Inf. Oh well. Already assigned forecast_period to time coordinate, and forecast_reference_time is part of filename.
+upscaled_fields["forecast_reference_time"] = forecast_reference_time
+upscaled_fields.to_dataframe(dim_order=["forecast_period","projection_y_coordinate","projection_x_coordinate"]).to_parquet(ofile) # put y before x coordinate so dataframe doesn't have to be transposed before plotting
 #np.savez_compressed(ofile, a=upscaled_fields.to_dict())
 print("saved", f"{os.path.realpath(ofile)}")
