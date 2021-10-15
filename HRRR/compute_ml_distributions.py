@@ -1,12 +1,13 @@
-import datetime as dt
+import datetime
 import glob
 import matplotlib.pyplot as plt
 import numpy as np
-import os, sys
-import pandas as pd
+import os
 import pdb
-import pickle
+import xarray
 
+
+debug=False
 
 def plot_qq(ds):
 
@@ -29,32 +30,34 @@ def plot_qq(ds):
             qn_a = qn
             x = np.linspace(ds.to_array().min(), ds.to_array().max())
             ax.plot(x,x, color="k", ls="--", label=name)
+            ax.set_xlabel(da.attrs["units"])
         else:
             ax.plot(qn_a, qn, label=name)
-
+            units = da.attrs["units"]
+            assert units == ax.get_xlabel()
+            ax.set_ylabel(units)
     l = ax.legend()
-    plt.savefig('qq.png')
 
-fields = ['255_0mb_above_ground/CAPE', 'surface/CAPE', '90_0mb_above_ground/CAPE']
+fields = ['255_0mb_above_ground-CAPE', 'surface-CAPE', '90_0mb_above_ground-CAPE']
 
-mask  = pickle.load(open('/glade/u/home/sobash/2013RT/usamask.pk', 'rb')).reshape([65,93])
-
-search_string = "/glade/work/ahijevyc/NSC_objects/HRRR/*HRRR-ZARR*.par"
-ifiles = glob.glob(search_string)
+search_string = "/glade/work/ahijevyc/NSC_objects/HRRR/202*HRRR-ZARR*.nc"
+ifiles = sorted(glob.glob(search_string))
 print(f"found {len(ifiles)} files matching {search_string}")
-itimes = [dt.datetime.strptime(os.path.basename(i),'%Y%m%d%H_HRRR-ZARR_upscaled.par') for i in ifiles]
-dfs = [pd.read_parquet(i) for i in ifiles]
-ds = pd.concat(dfs).set_index("forecast_reference_time", append=True, verify_integrity=True).to_xarray()
+itimes = [datetime.datetime.strptime(os.path.basename(i),'%Y%m%d%H_HRRR-ZARR_upscaled.nc') for i in ifiles]
+if debug:
+    for ifile in ifiles:
+        print("opening", ifile)
+        ds = xarray.open_mfdataset(ifile)[fields]
+    
+ds = xarray.open_mfdataset(ifiles)
 
 # Sanity check
 assert (ds.forecast_reference_time == np.array(itimes).astype(np.datetime64)).all(), "file names do not match DataFrame forecast_reference_times"
 
-ds = ds.transpose("forecast_reference_time", "forecast_period", "projection_y_coordinate", "projection_x_coordinate")
-ds = ds.mean(dim="forecast_period").mean(dim="forecast_reference_time")
-ds.coords['mask'] = (("projection_y_coordinate", "projection_x_coordinate"), mask)
-p = ds[fields].to_array().where(ds.mask, drop=True).plot(col="variable", robust=True)
-
-plt.savefig('test.png')
-
-plt.clf()
-plot_qq(ds[fields])
+ds = ds.transpose("forecast_reference_time", "forecast_period", "pts")
+print("grabbing",fields)
+ds = ds[fields]
+ds = ds.mean(dim="forecast_period", keep_attrs=True).mean(dim="forecast_reference_time", keep_attrs=True)
+plot_qq(ds)
+plt.suptitle(search_string)
+plt.savefig('qq.png')
