@@ -51,6 +51,8 @@ def scipyfilt(da):
     this_field = da.name
     print(f"upscaling {this_field}")
     da = da.astype(np.float32) # avoid *** RuntimeError: array type dtype('float16') not supported from scipy.ndimage
+    da = da.fillna(0) # slows things down 10% but needed because filtered "level_of_adiabatic_condensation_from_sfc-HGT" and "surface-HAIL_1hr_max_fcst" are all NaN otherwise.
+    #assert da.isnull().sum() == 0, "found null in "+this_field
     # use maximum for certain fields, mean for others 
     if this_field in ['MAXUVV_1hr_max_fcst', 'MAXREF_1hr_max_fcst', 'WIND_1hr_max_fcst', 'MXUPHL_1hr_max_fcst', 'HAIL_1hr_max_fcst']: 
         field = scipy.ndimage.filters.maximum_filter(da, size=(1,27,27), mode='reflect') # default mode='reflect' (d c b a | a b c d | d c b a) The input is extended by reflecting about the edge of the last pixel. This mode is also sometimes referred to as half-sample symmetric
@@ -58,6 +60,14 @@ def scipyfilt(da):
         field = scipy.ndimage.filters.minimum_filter(da, size=(1,27,27))
     else:
         field = scipy.ndimage.filters.uniform_filter(da, size=(1,27,27))
+        #print(da.isnull().sum())
+        #print(da.to_dataframe().describe())
+        #da.plot(col="time", col_wrap=8)
+        #plt.savefig(f"{this_field}.png")
+        #print(xarray.DataArray(data=field,name=this_field).to_dataframe().describe())
+        #print(np.isnan(field).sum())
+    # Timed one-line alternative below. (Flatten x and y dimensions of field, slice nngridpts[1] through all times, and reshape) but for loop is 10% faster
+    # field_interp = field.reshape((da.time.size, -1))[:,nngridpts[1]].reshape((da.time.size,65,93))
     field_interp = np.empty((da.time.size,65,93))
     for t,_ in enumerate(field):
         field_interp[t] = field[t].flatten()[nngridpts[1]].reshape((65,93))
@@ -75,6 +85,7 @@ def rename_upscale(ds): # how to handle multiple levels with same variable name
     assert 'forecast_period' not in ds.data_vars
     for da in ds:
         long_name = ds[da].attrs['long_name']
+        long_name = long_name.replace("/","-") # for netCDF and saving files based on name
         ds = ds.rename({da:long_name})
         return scipyfilt(ds[long_name])
 
@@ -85,16 +96,23 @@ def upscale_forecast(upscaled_field_list,nngridpts,debug=False):
 
     fs = s3fs.S3FileSystem(anon=True)
 
-
     level, variable = upscaled_field_list[0]
     # url without final level subdirectory has time, projection_x_coordinate, forecast_period, and forecast_reference_time
     coord_url = os.path.join('s3://hrrrzarr/sfc', sdate.strftime("%Y%m%d/%Y%m%d_%Hz_fcst.zarr"), level, variable)
     coord_ds = xarray.open_dataset(s3fs.S3Map(coord_url, s3=fs), engine='zarr')
+    # Sanity check - Throw error if reference time does not equal requested date.
+    # Some forecasts are repeats of the previous forecast hour. For example: if you request 2020121707 you get a repeat of 2020121706.
+    # Same with 2020121713 2020121719 2021012819.
+    # Alerted Adair Kovac <u1334098@utah.edu>, JAMES TERRY POWELL <u1269218@utah.edu>, "atmos-mesowest@lists.utah.edu" <atmos-mesowest@lists.utah.edu>
+    # and they confirmed a manual error and will redo them. Oct 15, 2021.
+    assert coord_ds.forecast_reference_time == np.datetime64(sdate), f"Unexpected forecast_reference_time: {coord_ds.forecast_reference_time.values}. requested {sdate}." 
     coord_ds = coord_ds.drop(labels=["projection_x_coordinate", "projection_y_coordinate"]) # projection coordinates will be different after upscaling
     urls = [os.path.join('s3://hrrrzarr/sfc', sdate.strftime("%Y%m%d/%Y%m%d_%Hz_fcst.zarr"), level, variable, level) for (level, variable) in upscaled_field_list]
     if debug:
-        # One at a time to find cause of zarr.errors.GroupNotFoundError: group not found at path ''
-        # usually a typo in url
+        # Grab url at a time to isolate cause of zarr.errors.GroupNotFoundError: group not found at path ''.
+        # Or, instead of opening datasets one at a time with debug, modify the zarr code to show the url with the error message.
+        # Add group.root to GroupNotFoundError argument in file /lib/python3.7/site-packages/zarr/hierarchy.py, line 1167, in open_group:
+        # raise GroupNotFoundError(store.root+path)
         for url in urls:
             print(f"getting {url}")
             ds = xarray.open_dataset(s3fs.S3Map(url, s3=fs), engine='zarr') 
@@ -116,17 +134,6 @@ def upscale_forecast(upscaled_field_list,nngridpts,debug=False):
     coord_ds = coord_ds.swap_dims({"time": "forecast_period"})
     ds = ds.rename({"time":"forecast_period"}).merge(coord_ds) # Rename "time" "forecast_period" and merge with coord_ds.
    
-    if debug:
-        da = ds["surface/CAPE"]
-        fig, ax = plt.subplots(ncols=2)
-        itime = 18
-        vmin, vmax = da.load().quantile([0.02, 0.98])
-        ax[0].imshow(da.isel(forecast_period=itime), vmin=vmin, vmax=vmax)
-        ax[1].imshow(field_interp[itime], vmin=vmin, vmax=vmax)
-        plt.show()
-        #plt.savefig(f"{this_field}.png")
-        plt.close(fig=fig)
-
     return ds
 
 # =============Arguments===================
@@ -225,51 +232,57 @@ derive_fields = len(upscaled_fields) > 10 # may have incomplete short list for d
 if derive_fields:
     upscaled_fields = upscaled_fields.metpy.quantify() 
     print("Derive fields")
-    upscaled_fields["0_1000m_above_ground/VSH"] = (upscaled_fields["0_1000m_above_ground/VUCSH"]**2 + upscaled_fields["0_1000m_above_ground/VVCSH"]**2)**0.5 * units["m/s"] # warned mesowest about VUCSH and VVCSH not having units 
-    upscaled_fields["0_6000m_above_ground/VSH"] = (upscaled_fields["0_6000m_above_ground/VUCSH"]**2 + upscaled_fields["0_6000m_above_ground/VVCSH"]**2)**0.5 * units["m/s"] # warned mesowest about VUCSH and VVCSH not having units 
-    # TODO: fix level_of_adiabatic_condensation_from_sfc/HGT. They are all NaN. I emailed James Powell at atmos-mesowest@lists.utah.edu
-    print(upscaled_fields["level_of_adiabatic_condensation_from_sfc/HGT"].to_dataframe().describe())
-    upscaled_fields["STP"] = mcalc.significant_tornado(upscaled_fields["surface/CAPE"], upscaled_fields["level_of_adiabatic_condensation_from_sfc/HGT"],
-            upscaled_fields["1000_0m_above_ground/HLCY"], upscaled_fields["0_6000m_above_ground/VSH"])
-    upscaled_fields["LR75"] = ( upscaled_fields["500mb/TMP"] - upscaled_fields["700mb/TMP"] ) / ( upscaled_fields["500mb/HGT"] - upscaled_fields["700mb/HGT"] )
-    upscaled_fields["CAPESHEAR"] = upscaled_fields["0_6000m_above_ground/VSH"] * upscaled_fields["90_0mb_above_ground/CAPE"] #mlcape
+    upscaled_fields["0_1000m_above_ground-VSH"] = (upscaled_fields["0_1000m_above_ground-VUCSH"]**2 + upscaled_fields["0_1000m_above_ground-VVCSH"]**2)**0.5 * units["m/s"] # warned mesowest about VUCSH and VVCSH not having units 
+    upscaled_fields["0_6000m_above_ground-VSH"] = (upscaled_fields["0_6000m_above_ground-VUCSH"]**2 + upscaled_fields["0_6000m_above_ground-VVCSH"]**2)**0.5 * units["m/s"] # warned mesowest about VUCSH and VVCSH not having units 
+    print(upscaled_fields["level_of_adiabatic_condensation_from_sfc-HGT"].to_dataframe().describe())
+    upscaled_fields["STP"] = mcalc.significant_tornado(upscaled_fields["surface-CAPE"], upscaled_fields["level_of_adiabatic_condensation_from_sfc-HGT"],
+            upscaled_fields["1000_0m_above_ground-HLCY"], upscaled_fields["0_6000m_above_ground-VSH"])
+    upscaled_fields["LR75"] = ( upscaled_fields["500mb-TMP"] - upscaled_fields["700mb-TMP"] ) / ( upscaled_fields["500mb-HGT"] - upscaled_fields["700mb-HGT"] )
+    upscaled_fields["CAPESHEAR"] = upscaled_fields["0_6000m_above_ground-VSH"] * upscaled_fields["90_0mb_above_ground-CAPE"] #mlcape
     upscaled_fields = upscaled_fields.metpy.dequantify()
 
+
+# TODO: deal with missing surface/PRES in these forecast_reference_times. They result in an error and prevent any of the dataset from being loaded.
+# 20201211 - 02, 03, 04, 05, 07, 08, 09, 10, 11, 13, 14, 15, 16, 18 ,19 
+# 20201217 - 00 
 
 
 
 # Save upscaled data to file. There are tradeoffs to each format.
-# .npz is fast and efficient but no names or labels.
+# .npz is fast and compact but has little metadata.
 # parquet has variable names and coordinate names and can write half-precision (2-byte) floats, like HRRR-ZARR, but no long_name or units.
 # netCDF can't handle np.float16, or slash characters in variable names, but it handles np.float32 (twice the filesize of parquet).
 # netCDF has named variables, coordinates, long_names and units.
 # Use netcdf but strip masked pts for efficiency.
 
-# Caveat: forecast_reference_time must remain 64-bit, so set aside before converting Dataset to np.float32.
-forecast_reference_time = upscaled_fields["forecast_reference_time"]
-upscaled_fields = upscaled_fields.astype(np.float32) # less disk space. HRRR-ZARR was even less precise, with np.float16, but to_netcdf() needs np.float32. 
-upscaled_fields["forecast_reference_time"] = forecast_reference_time
+
+# Caveat: forecast_reference_time must remain 64-bit, so set aside before converting Dataset to np.float16 or np.float32.
+# Assigning it as a coordinate preserves its dtype and it gives open_mfdataset a dimension to concatenate along.
+upscaled_fields = upscaled_fields.assign_coords(forecast_reference_time=(upscaled_fields.forecast_reference_time)).expand_dims(dim="forecast_reference_time")
 
 # Stack x and y into 1-D pts coordinate
 upscaled_fields = upscaled_fields.stack(pts=("projection_y_coordinate","projection_x_coordinate"))
 
+
+
 # Drop masked pts before saving--reduces file size by 75%
 mask = pickle.load(open('/glade/u/home/sobash/2013RT/usamask.pk','rb'))
 upscaled_fields.coords["mask"] = (("pts"), mask)
-# reset multi-index level "pts" or NotImplementedError: isna is not defined for MultiIndex from .to_dataframe().to_parquet(). Also, to_netcdf() can't save MultiIndex.
+# reset_index multi-index level "pts" or NotImplementedError: isna is not defined for MultiIndex from .to_dataframe().to_parquet(). Also, to_netcdf() can't save MultiIndex.
 upscaled_fields = upscaled_fields.where(upscaled_fields.mask, drop=True).reset_index("pts")
+# TODO: remove attribute coordinates = "projection_x_coordinate time projection_y_coordinate mask" from all DataArrays?
 
 root, ext = os.path.splitext(ofile)
 if parquet:
     ds = upscaled_fields.astype(np.float16)
-    ds["forecast_reference_time"] = forecast_reference_time
     ds.to_dataframe().to_parquet(root+".par")
+    print("saved", root+".par")
 if npz:
     ds = upscaled_fields.astype(np.float16)
-    ds["forecast_reference_time"] = forecast_reference_time
     np.savez_compressed(root+".npz", a=ds.to_dict())
+    print("saved", root+".npz")
 
-# Change slash to hyphen for netcdf variable names
-upscaled_fields = upscaled_fields.rename_vars({x:x.replace("/","-") for x in upscaled_fields.data_vars})
-upscaled_fields.to_netcdf(ofile)
+upscaled_fields = upscaled_fields.astype(np.float32) # less disk space. HRRR-ZARR was even less precise, with np.float16, but to_netcdf() needs np.float32. 
+encoding = {x:{"zlib":True} for x in upscaled_fields.data_vars}
+upscaled_fields.to_netcdf(ofile, encoding=encoding)
 print("saved", f"{os.path.realpath(ofile)}")
