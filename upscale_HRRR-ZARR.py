@@ -2,12 +2,11 @@
 
 import argparse
 import cartopy.crs
-from datetime import *
+import datetime
 import matplotlib.pyplot as plt
 import metpy 
 import metpy.calc as mcalc
 from metpy.units import units
-from mpl_toolkits.basemap import Basemap
 import numpy as np
 import os
 import pdb
@@ -25,26 +24,7 @@ import xarray
 def get_closest_gridbox():
     ### find closest 3-km or 1-km grid point to each 80-km grid point
     gpfname = f'{odir}/NSC_objects/nngridpts_80km_{model}.pk'
-    if os.path.exists(gpfname):
-        nngridpts = pickle.load(open(gpfname, 'rb'), encoding='bytes')
-    else:
-        print('finding closest grid points')
-        # INTERPOLATE TO 80KM GRID
-        awips = Basemap(projection='lcc', llcrnrlon=-133.459, llcrnrlat=12.19, urcrnrlon=-49.38641, urcrnrlat=57.2894, lat_1=25.0, lat_2=25.0, lon_0=-95, resolution=None, area_thresh=10000.)
-        grid81 = awips.makegrid(93, 65, returnxy=True)
-        x81, y81 = awips(grid81[0], grid81[1])
-        #x81 = (x[1:,1:] + x[:-1,:-1])/2.0
-        #y81 = (y[1:,1:] + y[:-1,:-1])/2.0
-
-        f = xarray.open_dataset('/glade/work/ahijevyc/share/HRRR.nc')
-        lats = f['gridlat_0']
-        lons = f['gridlon_0']
-        f.close()
-        xy = awips(lons.values.ravel(), lats.values.ravel())
-        tree = spatial.KDTree(list(zip(xy[0].ravel(),xy[1].ravel())))
-        nngridpts = tree.query(list(zip(x81.ravel(),y81.ravel())))
-        pickle.dump(nngridpts, open(gpfname, 'wb'))
-
+    nngridpts = pickle.load(open(gpfname, 'rb'), encoding='bytes')
     return nngridpts
 
 def scipyfilt(da):
@@ -102,7 +82,13 @@ def upscale_forecast(upscaled_field_list,nngridpts,debug=False):
     coord_ds = xarray.open_dataset(s3fs.S3Map(coord_url, s3=fs), engine='zarr')
     # Sanity check - Throw error if reference time does not equal requested date.
     # Some forecasts are repeats of the previous forecast hour. For example: if you request 2020121707 you get a repeat of 2020121706.
-    # Same with 2020121713 2020121719 2021012819.
+    # Same with 2020121713 2020121719 2021012819 2021030101 2021030113 2021030119 2021030307 2021030313 2021030413 
+    # 20210306 7 13 19 
+    # 20210307 7 
+    # 20210308 7
+    # 20210309 7 13 19
+    # 20210310 1 19
+    # 20210311 1
     # Alerted Adair Kovac <u1334098@utah.edu>, JAMES TERRY POWELL <u1269218@utah.edu>, "atmos-mesowest@lists.utah.edu" <atmos-mesowest@lists.utah.edu>
     # and they confirmed a manual error and will redo them. Oct 15, 2021.
     assert coord_ds.forecast_reference_time == np.datetime64(sdate), f"Unexpected forecast_reference_time: {coord_ds.forecast_reference_time.values}. requested {sdate}." 
@@ -150,7 +136,7 @@ debug   = args.debug
 npz     = args.npz
 parquet = args.parquet
 
-sdate   = datetime.strptime(args.sdate, '%Y%m%d%H')
+sdate   = datetime.datetime.strptime(args.sdate, '%Y%m%d%H')
 model   = 'HRRR-ZARR'
 odir    = "/glade/work/" + os.getenv("USER") 
 ofile   = f'{odir}/NSC_objects/HRRR/%s_{model}_upscaled.nc'%(sdate.strftime('%Y%m%d%H'))
@@ -266,11 +252,17 @@ upscaled_fields = upscaled_fields.stack(pts=("projection_y_coordinate","projecti
 
 
 # Drop masked pts before saving--reduces file size by 75%
-mask = pickle.load(open('/glade/u/home/sobash/2013RT/usamask.pk','rb'))
-upscaled_fields.coords["mask"] = (("pts"), mask)
+maskfile = '/glade/u/home/sobash/2013RT/usamask.pk'
+mask = pickle.load(open(maskfile,'rb'))
+upscaled_fields.coords["mask"] = (("pts"), mask) # TODO: put lat-lon and or projection information
 # reset_index multi-index level "pts" or NotImplementedError: isna is not defined for MultiIndex from .to_dataframe().to_parquet(). Also, to_netcdf() can't save MultiIndex.
 upscaled_fields = upscaled_fields.where(upscaled_fields.mask, drop=True).reset_index("pts")
-# TODO: remove attribute coordinates = "projection_x_coordinate time projection_y_coordinate mask" from all DataArrays?
+upscaled_fields.attrs = {
+    "command": " ".join(sys.argv) + f" by {os.getenv('USER')} at {datetime.datetime.now()}",
+    "description":f"unmasked NCEP grid 211 (80km) points over usa maskfile {maskfile}"
+    }
+
+# TODO: remove attribute coordinates = "projection_x_coordinate time projection_y_coordinate mask" from DataArrays?
 
 root, ext = os.path.splitext(ofile)
 if parquet:
@@ -284,5 +276,5 @@ if npz:
 
 upscaled_fields = upscaled_fields.astype(np.float32) # less disk space. HRRR-ZARR was even less precise, with np.float16, but to_netcdf() needs np.float32. 
 encoding = {x:{"zlib":True} for x in upscaled_fields.data_vars}
-upscaled_fields.to_netcdf(ofile, encoding=encoding)
+upscaled_fields.to_netcdf(ofile, encoding=encoding, unlimited_dims=["forecast_reference_time"])
 print("saved", f"{os.path.realpath(ofile)}")
