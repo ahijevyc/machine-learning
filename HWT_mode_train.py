@@ -1,23 +1,13 @@
 #!/usr/bin/env python
 
-
-def brier_score(obs, preds):
-    return K.mean((preds - obs) ** 2)
-
-def brier_skill_score(obs, preds):
-    bs = brier_score(obs, preds)
-    obs_climo = K.mean(obs, axis=0) # use each observed class frequency instead of 1/nclasses. Only matters if obs is multiclass.
-    bs_climo = K.mean((obs - obs_climo) ** 2)
-    bss = 1.0 - (bs/bs_climo+K.epsilon())
-    return bss
-
-def baseline_model(input_dim=None, name=None,numclasses=None, num_neurons=40, optimizer='adam', dropout=0):
+def baseline_model(input_dim=None, name=None,numclasses=None, neurons=16, layer=2, optimizer='adam', dropout=0):
 
     # Discard any pre-existing version of the model.
     model = Sequential(name=name)
-    model.add(Dense(num_neurons, input_dim=input_dim, activation='relu', name="storm_and_env_features"))
-    model.add(Dropout(rate=dropout))
-    model.add(Dense(num_neurons, activation='relu'))
+    model.add(Dense(neurons, input_dim=input_dim, activation='relu', name="storm_and_env_features"))
+    for i in range(layer-1):
+        model.add(Dropout(rate=dropout))
+        model.add(Dense(neurons, activation='relu'))
     model.add(Dropout(rate=dropout))
     if numclasses > 1:
         model.add(Dense(numclasses, activation='softmax', name="predictions")) # class probabilities add to 1
@@ -28,7 +18,7 @@ def baseline_model(input_dim=None, name=None,numclasses=None, num_neurons=40, op
     loss="binary_crossentropy"
     if numclasses > 1:
         loss="categorical_crossentropy"
-    model.compile(loss=loss, optimizer=optimizer, metrics=[brier_score, brier_skill_score, AUC(), "accuracy"])
+    model.compile(loss=loss, optimizer=optimizer, metrics=[MeanSquaredError(), brier_skill_score, AUC(), "accuracy"])
 
     return model
 
@@ -128,13 +118,13 @@ import argparse
 import glob
 import joblib
 import matplotlib.pyplot as plt
+from ml_functions import brier_skill_score
 import numpy as np
 import os
 import pandas as pd
 import pdb
 import pickle
 import scalar2vector
-from scikitplot.metrics import plot_confusion_matrix
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import cross_val_score, GridSearchCV, KFold 
@@ -146,6 +136,7 @@ from tensorflow.keras.metrics import MeanSquaredError, AUC
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
 import sys, time
+import yaml
 
 def main():
     # =============Arguments===================
@@ -179,7 +170,7 @@ def main():
     freezetime            = args.freezetime
     labelpick             = args.labelpick
     savedmodel            = args.model_fname
-    num_neurons           = args.neurons
+    neurons               = args.neurons
     segmentations         = args.segmentations
     train_test_split_time = args.splittime
     suite                 = args.suite
@@ -188,13 +179,12 @@ def main():
 
     ### NEURAL NETWORK PARAMETERS ###
 
-    nn_params = { 'num_neurons': num_neurons }
     dataset = 'NSC'
     trained_models_dir = '/glade/work/ahijevyc/NSC_objects'
     if savedmodel:
         pass
     else:
-        savedmodel = f"{suite}." + ".".join(label_longname_dict().keys()) + f".{labelpick}label.confmin{confmin}.ep{epochs[0]}.bs{batch_sizes[0]}"
+        savedmodel = f"{suite}." + ".".join(label_longname_dict().keys()) + f".{labelpick}label.confmin{confmin}.{neurons[0]}n.ep{epochs[0]}.bs{batch_sizes[0]}"
 
     ##################################
 
@@ -304,10 +294,10 @@ def main():
         optimizers = ['adam']
         sample_weight = [None]
         class_weight = [None]
-        gridsearch = len(optimizers) * len(num_neurons) * len(epochs) * len(batch_sizes) * len(dropouts) * len(sample_weight) * len(class_weight) > 1 # anything more than 1
+        gridsearch = len(optimizers) * len(neurons) * len(epochs) * len(batch_sizes) * len(dropouts) * len(sample_weight) * len(class_weight) > 1 # anything more than 1
         if gridsearch:
             model = KerasClassifier(build_fn=baseline_model, input_dim=norm_in_data.shape[1], numclasses=numclasses, verbose=0)
-            param_grid = dict(dropout=dropouts, optimizer=optimizers, num_neurons=num_neurons, epochs=epochs, batch_size=batch_sizes, sample_weight=sample_weight, class_weight=class_weight)
+            param_grid = dict(dropout=dropouts, optimizer=optimizers, num_neurons=neurons, epochs=epochs, batch_size=batch_sizes, sample_weight=sample_weight, class_weight=class_weight)
             grid = GridSearchCV(estimator=model, n_jobs=-1, param_grid = param_grid)
 
             grid_result = grid.fit(norm_in_data[train_indices], onehotlabels[train_indices], 
@@ -331,11 +321,19 @@ def main():
                     models.append(load_model(model_i, custom_objects=custom_objects))
                     history = models[-1].history
                 else:
-                    model = baseline_model(input_dim=norm_in_data.shape[1],numclasses=numclasses,num_neurons=num_neurons[0], name=f"fit_{i}")
+                    model = baseline_model(input_dim=norm_in_data.shape[1],numclasses=numclasses,neurons=neurons[0], name=f"fit_{i}")
                     history = model.fit(norm_in_data[train_indices], onehotlabels[train_indices], class_weight=class_weight[0], sample_weight=sample_weight[0], 
                         epochs=epochs[0], validation_data=(norm_in_data[test_indices], onehotlabels[test_indices]), batch_size=batch_sizes[0], verbose=2)
                     models.append(model)
                     model.save(model_i)
+                    model.save(model_i+".h5", save_format='h5', overwrite=clobber)
+                    # Save order of columns 
+                    with open(os.path.join(model_i, "columns.yaml"), "w") as file:
+                        yaml.dump(
+                                dict(columns=scaler.get_feature_names_out().tolist(),
+                                    mean=scaler.mean_.tolist(),
+                                    std=scaler.scale_.tolist())
+                            , file)
                 if True and history: # history is None in saved model
                     panel_inches = 4
                     import plot_keras_history
@@ -382,6 +380,7 @@ def main():
                 plt.clf()
             confusion_matrix = True
             if confusion_matrix:
+                from scikitplot.metrics import plot_confusion_matrix
                 print("confusion matrix")
                 fig, ax = plt.subplots()
                 y_pred_class = labels.cat.categories[np.argmax(y_pred, axis=1)]
