@@ -7,7 +7,7 @@ import os, sys
 from get_osr_gridded_by_day_hr import *
 import pickle
 import scipy.ndimage.filters
-
+import xarray as xr
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import *
 from matplotlib.colors import BoundaryNorm
@@ -25,13 +25,15 @@ def readSevereClimo(fname, day_of_year, hr):
 
 def computeClimo():
     gmt2cst = timedelta(hours=6)
+    
+    m = Basemap(projection='lcc', llcrnrlon=-133.459, llcrnrlat=12.19, urcrnrlon=-49.38641, urcrnrlat=57.2894, lat_1=25.0, lat_2=25.0, lon_0=-95, resolution=None, area_thresh=10000.)
+    grid81 = m.makegrid(93, 65, returnxy=True)
 
     mask  = pickle.load(open('/glade/u/home/sobash/2013RT/usamask.pk', 'rb'))
     mask = np.logical_not(mask)
     mask = mask.reshape((65,93))
 
     osr81_sum_by_year = []
-
     for year in range(1986,2016):
     #for year in range(2001,2016):
         #times in database are in CST, so if we want 00z-00z, subtract 6 hrs
@@ -41,12 +43,12 @@ def computeClimo():
             #osr81, osr81_count = get_osr_gridded(obs_start, obs_end, 93, 65, ['wind'])
             #osr81, osr81_count = get_osr_gridded_by_day(obs_start, obs_end, 93, 65, ['wind'])
             #osr81, osr81_count = get_osr_gridded_by_day_hr(obs_start, obs_end, 93, 65, ['wind','hailone','torn'])
-            osr81, osr81_count = get_osr_gridded_by_day_hr(obs_start, obs_end, 93, 65, ['torn'])
+            osr81, osr81_count = get_osr_gridded_by_day_hr(obs_start, obs_end, 93, 65, ['sighail'])
         else:
             #osr81, osr81_count = get_osr_gridded(obs_start, obs_end, 93, 65, ['wind'])
             #osr81, osr81_count = get_osr_gridded_by_day(obs_start, obs_end, 93, 65, ['wind'])
             #osr81, osr81_count = get_osr_gridded_by_day_hr(obs_start, obs_end, 93, 65, ['wind','hailone','torn'])
-            osr81, osr81_count = get_osr_gridded_by_day_hr(obs_start, obs_end, 93, 65, ['torn'])
+            osr81, osr81_count = get_osr_gridded_by_day_hr(obs_start, obs_end, 93, 65, ['sighail'])
     
         osr81[:,:,mask] = 0.0
         osr81_count[:,:,mask] = 0.0
@@ -55,23 +57,35 @@ def computeClimo():
         print(year, osr81.sum(), osr81_count.sum())
 
     osr81_sum_by_year = np.array(osr81_sum_by_year)
+
+    data = []
+    for sig in [40, 120]: 
+        #determine if report occurred within 2-hr and X-km of central grid pt
+        if sig == 40:  osr81_sum_by_year = scipy.ndimage.filters.maximum_filter(osr81_sum_by_year, footprint=np.ones((1,1,5,1,1)), mode='wrap')
+        if sig == 120: osr81_sum_by_year = scipy.ndimage.filters.maximum_filter(osr81_sum_by_year, footprint=np.ones((1,1,5,3,3)), mode='wrap')
+
+        frequency = osr81_sum_by_year.mean(axis=0)
+        frequency = scipy.ndimage.filters.gaussian_filter(frequency, sigma=[15,1.5,1.5,1.5], mode='wrap')
+        print(frequency.shape)
+
+        #for i in range(0,101,10): print(i, np.percentile(frequency, i))
+        data.append( frequency )   
+
+    ds = xr.Dataset(data_vars={
+                                'climo': ( ['window', 'day', 'hr', 'y', 'x'], np.array(data).astype('float32') ),
+                             },
+                            coords={'window': [40, 120],
+                                    'day': range(1,367),
+                                    'hr': range(0,24),
+                                    'lon': (('y', 'x'), grid81[0].astype('float32')),
+                                    'lat': (('y', 'x'), grid81[1].astype('float32')),
+                             },
+                            attrs={ 'output time':datetime.utcnow().strftime('%Y-%m-%d %H:%m:%s UTC') },
+                            )
+    ds.to_netcdf('climo_severe_2hr_sighail.nc')
  
-    #determine if report occurred within 2-hr and 120-km of central grid pt
-    osr81_sum_by_year = scipy.ndimage.filters.maximum_filter(osr81_sum_by_year, footprint=np.ones((1,1,5,3,3)), mode='wrap')
-    #osr81_sum_by_year = scipy.ndimage.filters.maximum_filter(osr81_sum_by_year, footprint=np.ones((1,1,5,1,1)), mode='wrap')
-
-    frequency = osr81_sum_by_year.mean(axis=0)
-    frequency = scipy.ndimage.filters.gaussian_filter(frequency, sigma=[15,1.5,1.5,1.5], mode='wrap')
-    print(frequency.shape)
-
-    for i in range(0,101,10): print(i, np.percentile(frequency, i))
-
-    m = Basemap(projection='lcc', llcrnrlon=-133.459, llcrnrlat=12.19, urcrnrlon=-49.38641, urcrnrlat=57.2894, lat_1=25.0, lat_2=25.0, lon_0=-95, resolution=None, area_thresh=10000.)
-    grid81 = m.makegrid(93, 65, returnxy=True)
-    
-    np.savez('climo_severe_120km_2hr_torn.npz', lats=grid81[1], lons=grid81[0], severe=frequency.astype('float32'))
+    #np.savez('climo_severe_120km_2hr_torn.npz', lats=grid81[1], lons=grid81[0], severe=frequency.astype('float32'))
     #np.savez('climo_severe_40km_2hr_torn.npz', lats=grid81[1], lons=grid81[0], severe=frequency.astype('float32'))
-
 
 def plot_climo():
     import cartopy.crs as ccrs
