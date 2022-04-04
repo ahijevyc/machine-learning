@@ -13,7 +13,7 @@ def get_osr_gridded_by_day_hr(sdate, edate, nx, ny, report_types=['wind', 'hail'
   gridx, gridy = gridpts81[2], gridpts81[3]
 
   # READ STORM REPORTS FROM DATABASE
-  conn = sqlite3.connect('/glade/u/home/sobash/2013RT/REPORTS/reports_all.db')
+  conn = sqlite3.connect('/glade/u/home/sobash/2013RT/REPORTS/reports_v20200626.db')
   c = conn.cursor()
   rpts = []
   for type in report_types:
