@@ -204,11 +204,10 @@ yyjjj = tdate.strftime('%y%j')
 #              'U700':23, 'V700':24, 'Z700':19, 'T700':20, 'TD700':21, \
 #              'U850':28, 'V850':29, 'Z850':25, 'T850':26, 'TD850':27, \
 #              'U925':32, 'V925':33, 'Z925':-999, 'T925':30, 'TD925':31 }
-
-elif sdate >= datetime(2018,7,12,12,0,0):
+#elif sdate >= datetime(2018,7,12,12,0,0):
     # these grib numbers are for HRRR sfc files from V3 - beginning 12z 2018 12 July
     # if forecast hour > 2
-    grib_dict = { 'UP_HELI_MAX':617, 'UP_HELI_MIN':619, 'UP_HELI_MAX03':623, 'GRPL_MAX':630, 'W_UP_MAX':611, 'W_DN_MAX':612,\
+grib_dict = { 'UP_HELI_MAX':617, 'UP_HELI_MIN':619, 'UP_HELI_MAX03':623, 'GRPL_MAX':630, 'W_UP_MAX':611, 'W_DN_MAX':612,\
                 'SBCAPE':708, 'SBCINH':709, 'MLCINH':758, 'MLCAPE':757, 'MUCAPE':759, 'SRH01':737, 'SRH03':736, 'T2':671, 'TD2':674, 'PSFC':644, \
                 'USHR6':742, 'VSHR6':743, 'USHR1':740, 'VSHR1':741, 'PREC_ACC_NC':690, 'WSPD10MAX':679, 'U10MAX':680, 'V10MAX':681, \
                 'SBLCL':756, 'CREF':601, 'REFL1KM':606, 'REFL4KM':607, 'HGT0C':744, 'RVORT1':626, \
@@ -217,9 +216,9 @@ elif sdate >= datetime(2018,7,12,12,0,0):
                 'U850':487, 'V850':488, 'Z850':481, 'T850':482, 'TD850':482, \
                 'U925':532, 'V925':533, 'Z925':526, 'T925':527, 'TD925':529 }
 
-    # some fields added 29 May 2020: search FFLDRO 
-    # anything greater than 692 is affected
-    if sdate >= datetime(2020,5,29,0,0,0):
+# some fields added 29 May 2020: search FFLDRO 
+# anything greater than 692 is affected
+if sdate >= datetime(2020,5,29,0,0,0):
         grib_dict = { 'UP_HELI_MAX':617, 'UP_HELI_MIN':619, 'UP_HELI_MAX03':623, 'GRPL_MAX':630, 'W_UP_MAX':611, 'W_DN_MAX':612,\
                 'SBCAPE':712, 'SBCINH':713, 'MLCINH':762, 'MLCAPE':761, 'MUCAPE':763, 'SRH01':741, 'SRH03':740, 'T2':671, 'TD2':674, 'PSFC':644, \
                 'USHR6':746, 'VSHR6':747, 'USHR1':744, 'VSHR1':745, 'PREC_ACC_NC':690, 'WSPD10MAX':679, 'U10MAX':680, 'V10MAX':681, \
@@ -238,11 +237,11 @@ elif sdate >= datetime(2018,7,12,12,0,0):
 #                'U700':21, 'V700':22, 'Z700':18, 'T700':19, 'TD700':20, \
 #                'U850':26, 'V850':27, 'Z850':23, 'T850':24, 'TD850':25, \
 #                'U925':30, 'V925':31, 'Z925':-999, 'T925':28, 'TD925':29 }
-else:
-    sys.exit('Grib IDs not available for HRRRv2 data')
+#else:
+#    sys.exit('Grib IDs not available for HRRRv2 data')
 
 # these fields will be written out 
-upscaled_fields = { 'SBCAPE':[], 'MLCAPE':[], 'SBCINH':[], 'MLCINH':[], 'UP_HELI_MAX':[], 'UP_HELI_MAX03':[], 'W_UP_MAX':[], 'W_DN_MAX':[],\
+upscaled_fields = { 'SBCAPE':[], 'MLCAPE':[], 'SBCINH':[], 'MLCINH':[], 'UP_HELI_MAX':[], 'UP_HELI_MAX03':[], 'UP_HELI_MIN':[], 'W_UP_MAX':[], 'W_DN_MAX':[],\
                     'SRH01':[], 'SRH03':[], 'SHR01':[], 'SHR06':[], 'CAPESHEAR':[], 'T2':[], 'TD2':[], 'PSFC':[], 'PREC_ACC_NC':[], 'WSPD10MAX':[], \
                     'UP_HELI_MAX80':[], 'UP_HELI_MAX120':[], 'SBLCL':[], 'STP':[], 'U500':[], 'V500':[], 'T500':[], 'TD500':[], 'U700':[],\
                     'V700':[], 'T700':[], 'TD700':[], 'U850':[], 'V850':[], 'T850':[], 'TD850':[], 'U925':[], 'V925':[], 'T925':[], 'TD925':[], \
@@ -271,8 +270,29 @@ for f in upscaled_fields.keys():
         if (len(combined[fhr][f]) > 0): upscaled_fields[f].append(combined[fhr][f])
         else: upscaled_fields[f].append(np.ones((65,93))*np.nan)
 
+# massage data into xarray dataset format
+# convert arrays to float (some need to be stored as double?)
+data_vars = {}
+for k, v in upscaled_fields.items():
+    data_vars[k] = ( ['fhr', 'y', 'x'], np.array(upscaled_fields[k]).astype(np.float32) )
+
+
+# output as xarray netcdf file
+print('Outputting netCDF')
+ds = xr.Dataset(data_vars=data_vars,
+                coords={ 'fhr': range(0,nfhr), },
+                attrs={ 'init':sdate.strftime('%Y%m%d%H') },
+                )
+
+# set up compression options
+comp = dict(zlib=True, complevel=1)
+encoding = {var: comp for var in ds.data_vars}
+
+#ds.to_netcdf('.predictions_%s_%dkm%s_%s_%s.nc'%(model,d,twin,expname,sdate.strftime('%Y%m%d%H')))
+ds.to_netcdf('/glade/work/sobash/NSC/%s_%s_upscaled.nc'%(sdate.strftime('%Y%m%d%H'),model), encoding=encoding)
+
 # save file
-np.savez_compressed('/glade/work/sobash/NSC/%s_%s_upscaled'%(sdate.strftime('%Y%m%d%H'),model), a=upscaled_fields)
+#np.savez_compressed('/glade/work/sobash/NSC/%s_%s_upscaled'%(sdate.strftime('%Y%m%d%H'),model), a=upscaled_fields)
 
 # plotting
 plotting = False 
