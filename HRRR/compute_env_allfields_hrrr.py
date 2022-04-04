@@ -242,7 +242,9 @@ nngridpts = get_closest_gridbox()
 # use multiprocess to run different forecast hours in parallel
 print('running upscaling in parallel')
 #nfhr      = 37
-nfhr      = 49 #for HRRRv4
+if sdate.hour in [0,6,12,18]: nfhr      = 49 #for HRRRv4
+else: nfhr = 19
+
 nprocs    = 6
 chunksize = int(math.ceil(nfhr / float(nprocs)))
 pool      = multiprocessing.Pool(processes=nprocs)
