@@ -96,6 +96,10 @@ else:
     logging.info(f"Reading {len(ifiles)} HRRR files")
     df = pd.concat( pd.read_parquet(ifile, engine="pyarrow") for ifile in ifiles)
 
+    N7_columns = [x for x in df.columns if "-N7" in x]
+    logging.info(f"drop {len(N7_columns)} N7 columns: {N7_columns}")
+    df = df.drop(columns=N7_columns)
+
     df = df.rename(columns=dict(xind="projection_y_coordinate",yind="projection_x_coordinate"))
     df["valid_time"] = pd.to_datetime(df["Date"]) + df["fhr"] * datetime.timedelta(hours=1)
     df = df.drop(columns=["Date"]) # don't need initialization date after deriving valid_time
@@ -123,7 +127,7 @@ labels = df[label_list] # converted to Boolean above
 df = df.drop(columns=label_list)
 
 df.info()
-labels.info()
+print(labels.sum())
 
 logging.info("normalize with training cases mean and std.")
 df_desc = pd.read_pickle("/glade/work/ahijevyc/NSC_objects/HRRR/scaling_values_all_HRRRX.pk") # conda activate tf if AttributeError: Can't get attribute 'new_block' on...
