@@ -36,7 +36,7 @@ parser.add_argument('--layers', default=2, type=int, help="number of hidden laye
 parser.add_argument('--model_fname', type=str, help="filename of machine learning model")
 parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
 parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
-parser.add_argument('--suite', type=str, default='sobash', help="name for group of features")
+parser.add_argument('--suite', type=str, default='sobash.noN7', help="name for group of features")
 parser.add_argument('--twin', type=int, default=2, help="time window in hours")
 
 
@@ -106,8 +106,8 @@ else:
 
     df["dayofyear"] = df["valid_time"].dt.dayofyear
     df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15
-    df = scalar2vector.decompose_circ_feature(df, "dayofyear", scale2rad=2.*np.pi/365.25)
-    df = scalar2vector.decompose_circ_feature(df, "Local_Solar_Hour", scale2rad=2.*np.pi/24.)
+    df = scalar2vector.decompose_circ_feature(df, "dayofyear", period=365.25)
+    df = scalar2vector.decompose_circ_feature(df, "Local_Solar_Hour", period=24)
     df = df.set_index(["valid_time","projection_y_coordinate","projection_x_coordinate"])
 
     glm = get_glm(twin,rptdist)
@@ -144,14 +144,14 @@ def statjob(fhr,statcurves=False):
     if statcurves:
         fig = plt.figure(figsize=(10,7))
     # test model
-    y_predss = []
+    y_preds = pd.DataFrame()
     this_fhr = df.fhr == fhr # Just this fhr
     df_fhr = df[this_fhr]
     labels_fhrs = labels[this_fhr]
     logging.debug(f"normalize {fhr}")
     df_fhr = (df_fhr - df_desc.loc["mean"]) / df_desc.loc["std"]
     stattxt = ""
-    for i in range(0,nfit):
+    for i in range(nfit):
         model_i = f"nn/nn_{savedmodel}_{i}"
         logging.debug(f"reading {model_i} column order")
         yl = yaml.load(open(os.path.join(model_i, "columns.yaml"),"r"), Loader=yaml.FullLoader)
@@ -167,27 +167,34 @@ def statjob(fhr,statcurves=False):
         logging.info(f"loading {model_i}")
         model = load_model(model_i, custom_objects=dict(brier_skill_score=brier_skill_score))
         logging.info(f"predicting...")
-        y_preds = model.predict(df_fhr.to_numpy())
-        y_predss.append(y_preds)
-        for icl, cl in enumerate(labels_fhrs.columns):
-            y_pred = y_preds[:,icl]
+        y_pred = model.predict(df_fhr.to_numpy())
+        y_pred = pd.DataFrame(y_pred, columns=labels_fhrs.columns, index=df_fhr.index)
+        y_pred = pd.concat([y_pred], keys=[i], names=["fit"]) # add fit level
+        y_preds = y_preds.append(y_pred)
+        for cl in labels_fhrs.columns:
+            y_pred = y_preds.xs(i, level="fit")[cl]
             labels_fhr = labels_fhrs[cl]
+            assert labels_fhr.index.equals(y_pred.index), f'fit {i} {cl} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
             bss = statisticplot.bss(labels_fhr, y_pred)
             base_rate = labels_fhr.mean()
-            auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) 
+            auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
             logging.info(f"{cl} fit={i} fhr={fhr} {bss} {base_rate} {auc}")
-            stattxt += f"{cl} {i} {fhr} {bss} {base_rate} {auc}\n"
-    y_preds = np.array(y_predss).mean(axis=0) # average probability over nfits 
+            stattxt += f"{cl},{i},{fhr},{bss},{base_rate},{auc}\n"
+    ensmean = y_preds.groupby(level=[1,2,3]).mean() # average probability over nfits 
+    assert "fit" not in ensmean.index.names, "fit should not be in average probability over nfits"
+    pd.concat([labels_fhrs.astype(int)], keys=["obs"], names=["fit"]).append(y_preds).to_csv(f"20210601_f{fhr:02d}.csv")
     thissavedmodel = savedmodel.replace('f01-f48', f'f{fhr:02d}')
     logging.debug(f"getting bss, base rate, auc")
-    for icl, cl in enumerate(labels_fhrs.columns):
-        y_pred = y_preds[:,icl]
+    for cl in labels_fhrs.columns:
+        y_pred = ensmean[cl]
         labels_fhr = labels_fhrs[cl]
+        labels_fhr = labels_fhr.reindex_like(y_pred) # valid_time is sorted in y_pred, not labels_fhr
+        assert labels_fhr.index.equals(y_pred.index), f'{cl} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
         bss = statisticplot.bss(labels_fhr, y_pred)
         base_rate = labels_fhr.mean()
-        auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) 
+        auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
         logging.info(f"{cl} ensmean fhr={fhr} {bss} {base_rate} {auc}")
-        stattxt += f"{cl} ensmean {fhr} {bss} {base_rate} {auc}\n"
+        stattxt += f"{cl},ensmean,{fhr},{bss},{base_rate},{auc}\n"
         if statcurves:
             logging.info(f"{cl} reliability diagram, histogram, & ROC curve")
             ax1 = plt.subplot2grid((3,2), (0,0), rowspan=2)
@@ -197,7 +204,7 @@ def statjob(fhr,statcurves=False):
             counts, bins, patches = statisticplot.count_histogram(ax2, y_pred)
             rc = statisticplot.ROC_curve(ROC_ax, labels_fhr, y_pred, fill=False, plabel=False)
             fig.suptitle(f"{suite} {cl}")
-            fig.text(0.5, 0.01, ' '.join(df.columns), wrap=True, fontsize=6)
+            fig.text(0.5, 0.01, ' '.join(df.columns), wrap=True, fontsize=5)
             ofile = f"nn/{thissavedmodel}.{cl}.statcurves.png"
             fig.savefig(ofile)
             logging.info(os.path.realpath(ofile))
@@ -212,5 +219,6 @@ data = pool.map(statjob, fhrs, chunksize)
 pool.close()
 
 with open(f"nn/nn_{savedmodel}.scores_parallel.txt", "w") as fh:
+    fh.write('class,mem,fhr,bss,base rate,auc\n')
     fh.write(''.join(data))
 
