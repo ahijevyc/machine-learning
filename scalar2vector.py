@@ -5,13 +5,11 @@ import sys
 
 # Decompose a circular feature like azimuth, LST, or orientation into its 1) sine and 2) cosine components.
 # Drop original circular feature, unless optional drop argument is set explicitly to False.
-def decompose_circ_feature(df: pd.DataFrame, *features, scale2rad=1, drop=True):
-    scale2rad=scale2rad
-    period = 2.*np.pi/scale2rad
+def decompose_circ_feature(df: pd.DataFrame, *features, period=2*np.pi, drop=True):
     for feature in features:
         logging.info(f"{feature} sin and cos components, period={period}")
-        df[feature+"_sin"] = np.sin(df[feature] * scale2rad)
-        df[feature+"_cos"] = np.cos(df[feature] * scale2rad)
+        df[feature+"_sin"] = np.sin(df[feature] * 2*np.pi/period)
+        df[feature+"_cos"] = np.cos(df[feature] * 2*np.pi/period)
         if drop:
             logging.debug(f"drop {feature} column from dataframe")
             df = df.drop(columns=feature)

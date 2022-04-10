@@ -181,8 +181,8 @@ def main():
         df["valid_time"] = pd.to_datetime(df["Date"]) + df["fhr"] * datetime.timedelta(hours=1)
         df["dayofyear"] = df["valid_time"].dt.dayofyear
         df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15
-        df = scalar2vector.decompose_circ_feature(df, "dayofyear", scale2rad=2.*np.pi/365.25)
-        df = scalar2vector.decompose_circ_feature(df, "Local_Solar_Hour", scale2rad=2.*np.pi/24.)
+        df = scalar2vector.decompose_circ_feature(df, "dayofyear", period=365.25)
+        df = scalar2vector.decompose_circ_feature(df, "Local_Solar_Hour", period=24)
         df = df.rename(columns=dict(Date="initialization_time", xind="projection_y_coordinate",yind="projection_x_coordinate"))
         dtype_dict =      {k:np.float32 for k in df.select_dtypes(np.float64).columns}
         dtype_dict.update({k:np.int32   for k in df.select_dtypes(np.int64).columns})

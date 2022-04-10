@@ -129,10 +129,10 @@ def main():
 
     X = df
     if "orientation" in X:
-        X = scalar2vector.decompose_circ_feature(X, "orientation", scale2rad=2., drop=True)
+        X = scalar2vector.decompose_circ_feature(X, "orientation", period=np.pi)
     if "Valid_Hour_UTC" in X:
         X.loc[:,"Local_Solar_Hour"] = X["Valid_Hour_UTC"] + X["Centroid_Lon"]/15.
-        X = scalar2vector.decompose_circ_feature(X, "Local_Solar_Hour", scale2rad=2.*np.pi/24., drop=True)
+        X = scalar2vector.decompose_circ_feature(X, "Local_Solar_Hour", period=24)
     X = X[features]
 
     # split into train and test.
@@ -283,7 +283,7 @@ if __name__ == "__main__":
             # speed things up without multiindex
             df = df.reset_index(drop=True)
             # Local solar time, sin and cos components
-            df = scalar2vector.decompose_circ_feature(df, "Local_Solar_Hour", scale2rad=2.*np.pi/24., drop=True)
+            df = scalar2vector.decompose_circ_feature(df, "Local_Solar_Hour", period=24)
 
             rptdist = 40
             # Convert severe report distance to boolean (0-rptdist = True)
