@@ -1,1 +1,0 @@
-/glade/scratch/ahijevyc/HWT_mode/HWT_mode_train.py
