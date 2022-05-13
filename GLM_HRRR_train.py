@@ -21,18 +21,18 @@ import argparse
 import datetime
 import G211
 import glob
+from hwtmode.data import decompose_circular_feature
+from hwtmode.evaluation import brier_skill_score
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import rptdist2bool, brier_skill_score, get_glm
+from ml_functions import rptdist2bool, get_glm
 import numpy as np
 import os
 import pandas as pd
 import pdb
 import pickle
-import scalar2vector
 import show_importances # for corr_dentro_plot
 from sklearn.model_selection import train_test_split
-import statisticplot # ahijevyc's module
 import tensorflow.keras.backend 
 from tensorflow.keras.layers import Dense, Dropout
 from tensorflow.keras.metrics import MeanSquaredError, AUC
@@ -181,8 +181,8 @@ def main():
         df["valid_time"] = pd.to_datetime(df["Date"]) + df["fhr"] * datetime.timedelta(hours=1)
         df["dayofyear"] = df["valid_time"].dt.dayofyear
         df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15
-        df = scalar2vector.decompose_circ_feature(df, "dayofyear", period=365.25)
-        df = scalar2vector.decompose_circ_feature(df, "Local_Solar_Hour", period=24)
+        df = decompose_circular_feature(df, "dayofyear", period=365.25)
+        df = decompose_circular_feature(df, "Local_Solar_Hour", period=24)
         df = df.rename(columns=dict(Date="initialization_time", xind="projection_y_coordinate",yind="projection_x_coordinate"))
         dtype_dict =      {k:np.float32 for k in df.select_dtypes(np.float64).columns}
         dtype_dict.update({k:np.int32   for k in df.select_dtypes(np.int64).columns})

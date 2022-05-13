@@ -2,18 +2,18 @@
 import argparse
 import datetime
 import glob
+from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
+from hwtmode.evaluation import brier_skill_score
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import rptdist2bool, brier_skill_score, get_glm
+from ml_functions import rptdist2bool, get_glm
 import multiprocessing
 import numpy as np
 import os
 import pandas as pd
 import pdb
 import pickle
-import scalar2vector
 import sklearn
-import statisticplot # ahijevyc's module
 from tensorflow.keras.models import load_model
 import sys
 import time
@@ -175,7 +175,7 @@ def statjob(fhr,statcurves=False):
             y_pred = y_preds.xs(i, level="fit")[cl]
             labels_fhr = labels_fhrs[cl]
             assert labels_fhr.index.equals(y_pred.index), f'fit {i} {cl} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
-            bss = statisticplot.bss(labels_fhr, y_pred)
+            bss = brier_skill_score(labels_fhr, y_pred)
             base_rate = labels_fhr.mean()
             auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
             logging.info(f"{cl} fit={i} fhr={fhr} {bss} {base_rate} {auc}")
@@ -190,7 +190,7 @@ def statjob(fhr,statcurves=False):
         labels_fhr = labels_fhrs[cl]
         labels_fhr = labels_fhr.reindex_like(y_pred) # valid_time is sorted in y_pred, not labels_fhr
         assert labels_fhr.index.equals(y_pred.index), f'{cl} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
-        bss = statisticplot.bss(labels_fhr, y_pred)
+        bss = brier_skill_score(labels_fhr, y_pred)
         base_rate = labels_fhr.mean()
         auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
         logging.info(f"{cl} ensmean fhr={fhr} {bss} {base_rate} {auc}")
@@ -200,9 +200,9 @@ def statjob(fhr,statcurves=False):
             ax1 = plt.subplot2grid((3,2), (0,0), rowspan=2)
             ax2 = plt.subplot2grid((3,2), (2,0), rowspan=1, sharex=ax1)
             ROC_ax = plt.subplot2grid((3,2), (0,1), rowspan=2)
-            reliability_diagram, = statisticplot.reliability_diagram(ax1, labels_fhr, y_pred)
-            counts, bins, patches = statisticplot.count_histogram(ax2, y_pred)
-            rc = statisticplot.ROC_curve(ROC_ax, labels_fhr, y_pred, fill=False, plabel=False)
+            reliability_diagram, = reliability_diagram(ax1, labels_fhr, y_pred)
+            counts, bins, patches = count_histogram(ax2, y_pred)
+            rc = ROC_curve(ROC_ax, labels_fhr, y_pred, fill=False, plabel=False)
             fig.suptitle(f"{suite} {cl}")
             fig.text(0.5, 0.01, ' '.join(df.columns), wrap=True, fontsize=5)
             ofile = f"nn/{thissavedmodel}.{cl}.statcurves.png"

@@ -2,13 +2,13 @@ from collections import defaultdict
 import datetime
 import glob
 import visualizecv
-import HWT_mode_train
+import hwtmode
+import hwtmode.data
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
 import pdb
-import scalar2vector
 from scipy.stats import spearmanr
 from scipy.cluster import hierarchy
 from scipy.spatial.distance import squareform
@@ -23,6 +23,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.tree import DecisionTreeRegressor
 import sys
+import train_mode_dnn
 from tensorflow.keras.utils import to_categorical 
 import xarray
 #from xgboost import XGBRegressor
@@ -104,7 +105,7 @@ figh=14
 
 
 def main():
-    features = HWT_mode_train.feature_dict[suite]
+    features = train_mode_dnn.feature_dict[suite]
     segmentations = ["hyst"]
     class_startswith = None
     labelpick = "first"
@@ -129,10 +130,10 @@ def main():
 
     X = df
     if "orientation" in X:
-        X = scalar2vector.decompose_circ_feature(X, "orientation", period=np.pi)
+        X = hwtmode.data.decompose_circular_feature(X, "orientation", period=np.pi)
     if "Valid_Hour_UTC" in X:
         X.loc[:,"Local_Solar_Hour"] = X["Valid_Hour_UTC"] + X["Centroid_Lon"]/15.
-        X = scalar2vector.decompose_circ_feature(X, "Local_Solar_Hour", period=24)
+        X = hwtmode.data.decompose_circular_feature(X, "Local_Solar_Hour", period=24)
     X = X[features]
 
     # split into train and test.
@@ -283,7 +284,7 @@ if __name__ == "__main__":
             # speed things up without multiindex
             df = df.reset_index(drop=True)
             # Local solar time, sin and cos components
-            df = scalar2vector.decompose_circ_feature(df, "Local_Solar_Hour", period=24)
+            df = hwtmode.data.decompose_circular_feature(df, "Local_Solar_Hour", period=24)
 
             rptdist = 40
             # Convert severe report distance to boolean (0-rptdist = True)
