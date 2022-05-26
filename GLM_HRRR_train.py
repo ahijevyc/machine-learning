@@ -22,10 +22,9 @@ import datetime
 import G211
 import glob
 from hwtmode.data import decompose_circular_feature
-from hwtmode.evaluation import brier_skill_score
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import rptdist2bool, get_glm
+from ml_functions import brier_skill_score, rptdist2bool, get_glm
 import numpy as np
 import os
 import pandas as pd
@@ -154,7 +153,7 @@ def main():
     logging.info("read HRRR predictors")
     #yyyymm = "2021020"
     #ds = xarray.open_mfdataset(f'/glade/work/ahijevyc/NSC_objects/HRRR/{yyyymm}*_HRRR-ZARR_upscaled.nc', preprocess=lambda x:x.sel(forecast_period=fhr))
-    alsoHRRRv4 = True
+    alsoHRRRv4 = False
     ifile = '/glade/work/ahijevyc/NSC_objects/HRRR/HRRRX.32bit.par'
     ifile = '/glade/work/ahijevyc/NSC_objects/HRRR/HRRRX.32bit.noN7.par'
     if alsoHRRRv4: ifile = '/glade/work/ahijevyc/NSC_objects/HRRR/HRRRXHRRR.32bit.noN7.par'
