@@ -1,7 +1,7 @@
-#!/usr/bin/env python
 import argparse
 import datetime
 import glob
+from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 from hwtmode.evaluation import brier_skill_score
 import logging
@@ -20,11 +20,15 @@ import time
 import xarray
 import yaml
 
+"""
+ Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
+ execcasper --ngpus 13 --mem=50GB # gpus not neeeded for verification
+"""
 
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 # =============Arguments===================
-parser = argparse.ArgumentParser(description = "train/predict neural network",
+parser = argparse.ArgumentParser(description = "predict with neural network. output truth and predictions from each member and ensemble mean for each forecast hour",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--batchsize', type=int, default=512, help="nn training batch size")
 parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")
@@ -35,6 +39,7 @@ parser.add_argument('--flash', type=int, default=10, help="GLM flash threshold")
 parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
 parser.add_argument('--model_fname', type=str, help="filename of machine learning model")
 parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
+parser.add_argument('--nprocs', type=int, default=12, help="verify this many forecast hours in parallel")
 parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
 parser.add_argument('--suite', type=str, default='sobash.noN7', help="name for group of features")
 parser.add_argument('--twin', type=int, default=2, help="time window in hours")
@@ -50,6 +55,7 @@ flash                 = args.flash
 nfit                  = args.nfits
 layer                 = args.layers
 neurons               = args.neurons
+nprocs                = args.nprocs
 rptdist               = args.rptdist
 savedmodel            = args.model_fname
 suite                 = args.suite
@@ -81,6 +87,14 @@ nextfit = f"nn/nn_{savedmodel}_{i+1}"
 if os.path.exists(nextfit):
     logging.warning(f"next fit exists ({nextfit}). Are you sure nfit only {nfit}?")
 
+odir = os.path.join("/glade/scratch", os.getenv("USER"), "GLM")
+if not os.path.exists(odir):
+    logging.info(f"making directory {odir}")
+    os.mkdir(odir)
+
+ofile = os.path.realpath(f"nn/nn_{savedmodel}.scores.txt")
+logging.info(f"output file will be {ofile}")
+
 ##################################
 
 
@@ -106,8 +120,8 @@ else:
 
     df["dayofyear"] = df["valid_time"].dt.dayofyear
     df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15
-    df = scalar2vector.decompose_circ_feature(df, "dayofyear", period=365.25)
-    df = scalar2vector.decompose_circ_feature(df, "Local_Solar_Hour", period=24)
+    df = decompose_circular_feature(df, "dayofyear", period=365.25)
+    df = decompose_circular_feature(df, "Local_Solar_Hour", period=24)
     df = df.set_index(["valid_time","projection_y_coordinate","projection_x_coordinate"])
 
     glm = get_glm(twin,rptdist)
@@ -182,7 +196,9 @@ def statjob(fhr,statcurves=False):
             stattxt += f"{cl},{i},{fhr},{bss},{base_rate},{auc}\n"
     ensmean = y_preds.groupby(level=[1,2,3]).mean() # average probability over nfits 
     assert "fit" not in ensmean.index.names, "fit should not be in average probability over nfits"
-    pd.concat([labels_fhrs.astype(int)], keys=["obs"], names=["fit"]).append(y_preds).to_csv(f"20210601_f{fhr:02d}.csv")
+    # write predictions from each member and ensemble mean and the observed truth. (for debugging). 
+    ofile = os.path.join(odir, f"f{fhr:02d}.csv")
+    pd.concat([labels_fhrs.astype(int)], keys=["obs"], names=["fit"]).append(y_preds).to_csv(ofile)
     thissavedmodel = savedmodel.replace('f01-f48', f'f{fhr:02d}')
     logging.debug(f"getting bss, base rate, auc")
     for cl in labels_fhrs.columns:
@@ -212,13 +228,15 @@ def statjob(fhr,statcurves=False):
     return stattxt
 
 fhrs = range(1,49)
-nprocs = 8
+# Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
+# execcasper --ngpus=13 --mem=50GB # gpus not neeeded for verification
 chunksize = int(np.ceil(len(fhrs)/float(nprocs)))
 pool = multiprocessing.Pool(processes=nprocs)
 data = pool.map(statjob, fhrs, chunksize)
 pool.close()
 
-with open(f"nn/nn_{savedmodel}.scores_parallel.txt", "w") as fh:
+with open(ofile, "w") as fh:
     fh.write('class,mem,fhr,bss,base rate,auc\n')
     fh.write(''.join(data))
 
+logging.info(f"wrote {ofile}. Plot with ~ahijevyc/bin/nn_scores.py")
