@@ -1,1 +1,1 @@
-/glade/u/home/ahijevyc/lib/python3.6/statisticplot.py
+/glade/scratch/ahijevyc/HWT_mode/hwtmode/statisticplot.py
