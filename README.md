@@ -1,5 +1,4 @@
-# NSC_objects
-machine-learning-tools
+# machine-learning-tools
 
 accidentally deleted all important .py scripts (except HWT_mode_train.py) by adding them to git
 and removing .git directory. I was trying to change branch from master to main.
