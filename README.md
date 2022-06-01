@@ -1,6 +1,4 @@
-# NSC_objects
-machine-learning-tools
-## How to create conda environment
+# machine-learning-tools
 
 conda env create -f environment.yaml
 
