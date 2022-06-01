@@ -1,6 +1,10 @@
 # NSC_objects
 machine-learning-tools
+## How to create conda environment
 
+conda env create -f environment.yaml
+
+### history notes
 accidentally deleted all important .py scripts (except HWT_mode_train.py) by adding them to git
 and removing .git directory. I was trying to change branch from master to main.
 
