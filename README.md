@@ -1,6 +1,12 @@
 # machine-learning-tools
 
+## Create conda enviroment
+
 conda env create -f environment.yaml
+
+## Train Dense Neural Network
+
+train_GLM_dnn.py
 
 ### history notes
 accidentally deleted all important .py scripts (except HWT_mode_train.py) by adding them to git
