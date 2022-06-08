@@ -2,7 +2,15 @@
 
 ## Create conda enviroment
 
-conda env create -f environment.yaml
+conda env create -f environment_from_history.yaml
+
+git clone https://github.com/NCAR/HWT_mode.git
+
+cd HWT_mode
+
+git checkout -b ahijevyc remotes/origin/ahijevyc
+
+pip install . 
 
 ## Train Dense Neural Network
 
