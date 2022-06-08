@@ -140,7 +140,8 @@ def main():
 
     ##################################
 
-    mask = pickle.load(open('/glade/u/home/sobash/2013RT/usamask.pk', 'rb'))
+    #mask = pickle.load(open('/glade/u/home/sobash/2013RT/usamask.pk', 'rb'))
+    mask = pickle.load(open('./usamask.pk', 'rb'))
     height, width =  65,93
     mask = mask.reshape((height,width))
     mask = xarray.DataArray(mask,dims=["y","x"])
