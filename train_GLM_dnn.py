@@ -95,11 +95,13 @@ def main():
     parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
     parser.add_argument('--flash', type=int, default=10, help="GLM flash threshold")
     parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
-    parser.add_argument('--model_fname', type=str, help="filename of machine learning model")
+    parser.add_argument('--model', type=str, choices=["HRRR","NSC3km-12sec"], default="HRRR", help="prediction model")
+    parser.add_argument("--noglm", action='store_true', help='Do not use GLM')
+    parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
     parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
     parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
     parser.add_argument('--splittime', type=lambda s: pd.to_datetime(s), default="202012021200", help="train with storms before this time; test this time and after")
-    parser.add_argument('--suite', type=str, default='sobash', help="name for group of features")
+    parser.add_argument('--suite', type=str, default='sobash', help="name for suite of training features")
     parser.add_argument('--twin', type=int, default=2, help="time window in hours")
 
 
@@ -114,10 +116,12 @@ def main():
     fhr                   = args.fhr
     fits                  = args.fits
     nfit                  = args.nfits
+    noglm                 = args.noglm
     layer                 = args.layers
+    model                 = args.model
     neurons               = args.neurons
     rptdist               = args.rptdist
-    savedmodel            = args.model_fname
+    savedmodel            = args.savedmodel
     train_test_split_time = args.splittime
     suite                 = args.suite
     twin                  = args.twin
@@ -135,7 +139,7 @@ def main():
         pass
     else:
         fhr_str = make_fhr_str(fhr) # abbreviate list of forecast hours with hyphens (where possible) so model name is not too long for tf. 
-        savedmodel = f"{suite}.{flash}flash_{twin}hr.rpt_{rptdist}km_{twin}hr.{neurons[0]}n.ep{epochs}.{fhr_str}.bs{batchsize}.{layer}layer"
+        savedmodel = f"{model}.{suite}.{flash}flash_{twin}hr.rpt_{rptdist}km_{twin}hr.{neurons[0]}n.ep{epochs}.{fhr_str}.bs{batchsize}.{layer}layer"
     logging.info(f"savedmodel={savedmodel}")
 
     ##################################
@@ -151,22 +155,30 @@ def main():
         ys = G211.ys
 
 
-    logging.info("read HRRR predictors")
-    #yyyymm = "2021020"
-    #ds = xarray.open_mfdataset(f'/glade/work/ahijevyc/NSC_objects/HRRR/{yyyymm}*_HRRR-ZARR_upscaled.nc', preprocess=lambda x:x.sel(forecast_period=fhr))
-    alsoHRRRv4 = False
-    ifile = '/glade/work/ahijevyc/NSC_objects/HRRR/HRRRX.32bit.par'
-    ifile = '/glade/work/ahijevyc/NSC_objects/HRRR/HRRRX.32bit.noN7.par'
-    if alsoHRRRv4: ifile = '/glade/work/ahijevyc/NSC_objects/HRRR/HRRRXHRRR.32bit.noN7.par'
+    logging.info(f"Read {model} predictors. Use parquet file, if it exists. If it doesn't exist, create it.")
+    if model == "HRRR":
+        alsoHRRRv4 = False
+        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.par'
+        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.noN7.par'
+        if alsoHRRRv4: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.noN7.par'
+    elif model == "NSC3km-12sec":
+        ifile = f'{model}.par'
+
     if os.path.exists(ifile):
         logging.info(f'reading {ifile}')
         df = pd.read_parquet(ifile, engine="pyarrow")
     else:
-        search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRRX_d01_20*00-0000.par' # just 00z 
-        ifiles = glob.glob(search_str)
-        if alsoHRRRv4:
-            search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202[01]*00-0000.par' # HRRR, not HRRRX. no 2022 (yet) 
-            ifiles.extend(glob.glob(search_str))
+        # Define ifiles, a list of input files from glob.glob method
+        if model == "HRRR":
+            search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRRX_d01_20*00-0000.par' # just 00z 
+            ifiles = glob.glob(search_str)
+            if alsoHRRRv4:
+                search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202[01]*00-0000.par' # HRRR, not HRRRX. no 2022 (yet) 
+                ifiles.extend(glob.glob(search_str))
+        elif model == "NSC3km-12sec":
+            search_str = f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_2010*00-0000.par'
+            ifiles = glob.glob(search_str)
+
         # remove larger neighborhood size (fields containing N7 in the name)
         df = pd.read_parquet(ifiles[0], engine="pyarrow")
         columns = df.columns
@@ -175,7 +187,7 @@ def main():
             logging.debug(f"ignoring {len(N7_columns)} N7 columns: {N7_columns}")
             columns = set(df.columns) - set(N7_columns)
         # all columns including severe reports
-        logging.info(f"Reading {len(ifiles)} HRRR files {search_str}")
+        logging.info(f"Reading {len(ifiles)} {model} files {search_str}")
         df = pd.concat( pd.read_parquet(ifile, engine="pyarrow", columns=columns) for ifile in ifiles)
         logging.info("done")
         df["valid_time"] = pd.to_datetime(df["Date"]) + df["fhr"] * datetime.timedelta(hours=1)
@@ -192,16 +204,22 @@ def main():
         logging.info(f"writing {ifile}")
         df.to_parquet(ifile)
 
-    glm = get_glm(twin, rptdist)
-    logging.info("Merge flashes with df")
-    df = df.merge(glm.to_dataframe(), on=df.index.names)
+    if not noglm:
+        latest_valid_time = df.index.max()[0]
+        assert latest_valid_time > pd.to_datetime("20160101"), "DataFrame completely before GLM exists"
+        glm = get_glm(twin, rptdist)
+        logging.info("Merge flashes with df")
+        #Do {model} and GLM overlap at all?"
+        df = df.merge(glm.to_dataframe(), on=df.index.names)
+        assert not df.empty, f"Merged Dataset is empty."
+    
     df, rptcols = rptdist2bool(df, rptdist, twin)
 
     plotclimo=False
     if plotclimo:
         mdf = df.groupby(["lon_x","lat_x"]).sum() # for debug plot
         fig, axes = plt.subplots(nrows=3,ncols=2)
-        for label,ax in zip(["flashes", "torn_rptdist_2hr", "hailone_rptdist_2hr", "sighail_rptdist_2hr", "wind_rptdist_2hr", "sigwind_rptdist_2hr"], axes.flatten()):
+        for label,ax in zip(rptcols, axes.flatten()):
             im = ax.scatter(mdf.index.get_level_values("lon_x"), mdf.index.get_level_values("lat_x"), c=mdf[label]) # Don't use mdf (sum) for lon/lat
             ax.set_title(label)
             fig.colorbar(im, ax=ax)
@@ -210,17 +228,18 @@ def main():
     # speed things up without multiindex
     df = df.reset_index(drop=True)
 
-    # Sanity check--make sure HRRR and GLM grid box lat lons are similar
-    assert (df.lon_y - df.lon_x).max() < 0.1, "hrrr and glm longitudes don't match"
-    assert (df.lat_y - df.lat_x).max() < 0.1, "hrrr and glm lats don't match"
-    df = df.drop(columns=["lon_y","lat_y"])
-    df = df.rename(columns=dict(lon_x="lon",lat_x="lat")) # helpful for scale factor pickle file.
+    if not noglm:
+        # Sanity check--make sure prediction model and GLM grid box lat lons are similar
+        assert (df.lon_y - df.lon_x).max() < 0.1, "{model} and glm longitudes don't match"
+        assert (df.lat_y - df.lat_x).max() < 0.1, "{model} and glm lats don't match"
+        df = df.drop(columns=["lon_y","lat_y"])
+        df = df.rename(columns=dict(lon_x="lon",lat_x="lat")) # helpful for scale factor pickle file.
+        df["flashes"] = df["flashes"] >= flash
+        rptcols.append("flashes")
 
 
-    df["flashes"] = df["flashes"] >= flash
-    label_list = rptcols + ["flashes"] 
-    labels = df[label_list] # converted to Boolean above
-    df = df.drop(columns=label_list)
+    labels = df[rptcols] # converted to Boolean above
+    df = df.drop(columns=rptcols)
 
     df.info()
     labels.info()
