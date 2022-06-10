@@ -30,7 +30,6 @@ import os
 import pandas as pd
 import pdb
 import pickle
-import show_importances # for corr_dentro_plot
 from sklearn.model_selection import train_test_split
 import tensorflow.keras.backend 
 from tensorflow.keras.layers import Dense, Dropout
@@ -161,8 +160,10 @@ def main():
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.par'
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.noN7.par'
         if alsoHRRRv4: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.noN7.par'
+        scalingfile = f"/glade/work/ahijevyc/NSC_objects/{model}/scaling_values_all_HRRRX.pk"
     elif model == "NSC3km-12sec":
         ifile = f'{model}.par'
+        scalingfile = f"scaling_values_{model}.pk"
 
     if os.path.exists(ifile):
         logging.info(f'reading {ifile}')
@@ -176,7 +177,7 @@ def main():
                 search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202[01]*00-0000.par' # HRRR, not HRRRX. no 2022 (yet) 
                 ifiles.extend(glob.glob(search_str))
         elif model == "NSC3km-12sec":
-            search_str = f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_2010*00-0000.par'
+            search_str = f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_201*00-0000.par'
             ifiles = glob.glob(search_str)
 
         # remove larger neighborhood size (fields containing N7 in the name)
@@ -241,6 +242,11 @@ def main():
     labels = df[rptcols] # converted to Boolean above
     df = df.drop(columns=rptcols)
 
+    if (df["HAILCAST_DIAM_MAX"] == 0).all():
+        logging.info("HAILCAST_DIAM_MAX all zeros. Dropping.")
+        df = df.drop(columns="HAILCAST_DIAM_MAX")
+
+
     df.info()
     labels.info()
 
@@ -261,15 +267,15 @@ def main():
 
     assert all(train_labels.sum()) > 0, "some classes have no True labels in training set"
 
+
     logging.info("normalize data")
-    sfile = "/glade/work/ahijevyc/NSC_objects/HRRR/scaling_values_all_HRRRX.pk"
-    if os.path.exists(sfile):
-        logging.debug(f"using pickle file {sfile}")
-        sv = pickle.load(open(sfile, "rb")).astype(np.float32)
+    if os.path.exists(scalingfile):
+        logging.info(f"using pickle file {scalingfile}")
+        sv = pickle.load(open(scalingfile, "rb")).astype(np.float32)
     else:
-        logging.debug("calculating mean and std")
+        logging.info(f"calculate mean and std, save to {scalingfile}")
         sv = df_train.describe()
-        sv.to_pickle(sfile)
+        sv.to_pickle(scalingfile)
 
     # You might have scaling factors for columns that you dropped already, like -N7 columns.
     extra_sv_columns = set(sv.columns) - set(df.columns)
@@ -277,14 +283,20 @@ def main():
         logging.warning(f"dropping {len(extra_sv_columns)} extra scaling factor columns {extra_sv_columns}")
         sv = sv.drop(columns=extra_sv_columns)
 
+    # Check for zero standard deviation. (can't normalize)
+    stdiszero = sv.loc["std"] == 0
+    if stdiszero.any():
+        logging.error(f"{sv.columns[stdiszero]} std equals zero")
     df_train = (df_train - sv.loc["mean"]) / sv.loc["std"]
     df_test  = (df_test  - sv.loc["mean"]) / sv.loc["std"]
     logging.info('done normalizing')
 
     df_train.info()
 
+    if df_train.describe().isna().any().any():
+        logging.error(f"nan(s) in {df_train.columns[df_train.mean().isna()]}")
     # train model
-    if not fits:
+    if not fits: # if user did not ask for specific fits, assume fits range from 0 to nfit-1.
         fits = range(0,nfit)
     for i in fits:
         model_i = f"nn/nn_{savedmodel}_{i}"
@@ -293,8 +305,8 @@ def main():
         else:
             logging.info(f"fitting {model_i}")
             model = baseline_model(input_dim=df_train.columns.size,numclasses=train_labels.columns.size, neurons=neurons[0], layer=layer, name=f"fit_{i}")
-            history = model.fit(df_train.to_numpy(), train_labels.to_numpy(), class_weight=None, sample_weight=None, batch_size=batchsize,
-                epochs=epochs, validation_data=(df_test, test_labels), verbose=2)
+            history = model.fit(df_train.to_numpy(dtype='float32'), train_labels.to_numpy(dtype='float32'), class_weight=None, sample_weight=None, batch_size=batchsize,
+                epochs=epochs, validation_data=(df_test.to_numpy(dtype='float32'), test_labels.to_numpy(dtype='float32')), verbose=2)
             logging.debug(f"saving {model_i}")
             model.save(model_i)
             # Save order of columns, scaling factors 
