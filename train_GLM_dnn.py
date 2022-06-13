@@ -82,7 +82,7 @@ def main():
     import pandas as pd # started getting UnboundLocalError: local variable 'pd' referenced before assignment Mar 1 2022 even though I import pandas above
 
     # =============Arguments===================
-    parser = argparse.ArgumentParser(description = "train/predict neural network",
+    parser = argparse.ArgumentParser(description = "train neural network",
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--batchsize', type=int, default=512, help="nn training batch size") # tf default is 32
     parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")

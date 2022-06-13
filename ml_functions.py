@@ -11,6 +11,7 @@ import hwtmode.statisticplot
 import scipy.ndimage.filters
 from sklearn.calibration import calibration_curve
 from sklearn import metrics
+from tensorflow import is_tensor
 from tensorflow.keras import backend as K
 import time, os
 import xarray
@@ -19,11 +20,18 @@ def log(msg, flush=True):
     print( time.ctime(time.time()), msg , flush=flush)
 
 def brier_skill_score(obs, preds):
-    bs = K.mean((preds - obs) ** 2)
-    obs_climo = K.mean(obs, axis=0) # use each observed class frequency instead of 1/nclasses. Only matters if obs is multiclass.
-    bs_climo = K.mean((obs - obs_climo) ** 2)
-    #bss = 1.0 - (bs/bs_climo+K.epsilon()) # TODO: shouldn't K.epsilon() be grouped with denominator?
-    bss = 1.0 - bs/(bs_climo+K.epsilon()) 
+    if is_tensor(obs) and is_tensor(preds): 
+        bs = K.mean((preds - obs) ** 2)
+        obs_climo = K.mean(obs, axis=0) # use each observed class frequency instead of 1/nclasses. Only matters if obs is multiclass.
+        bs_climo = K.mean((obs - obs_climo) ** 2)
+        #bss = 1.0 - (bs/bs_climo+K.epsilon()) # TODO: shouldn't K.epsilon() be grouped with denominator?
+        bss = 1.0 - bs/(bs_climo+K.epsilon())
+    else:
+        bs = np.mean((preds - obs) ** 2)
+        obs_climo = np.mean(obs, axis=0) # use each observed class frequency instead of 1/nclasses. Only matters if obs is multiclass.
+        bs_climo = np.mean((obs - obs_climo) ** 2)
+        bss = 1 - bs/bs_climo
+
     return bss
 
 def rptdist2bool(df, rptdist, twin):

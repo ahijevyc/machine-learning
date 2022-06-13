@@ -3,10 +3,9 @@ import datetime
 import glob
 from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
-from hwtmode.evaluation import brier_skill_score
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import rptdist2bool, get_glm
+from ml_functions import brier_skill_score, rptdist2bool, get_glm
 import multiprocessing
 import numpy as np
 import os
@@ -27,21 +26,24 @@ import yaml
 
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
+
 # =============Arguments===================
-parser = argparse.ArgumentParser(description = "predict with neural network. output truth and predictions from each member and ensemble mean for each forecast hour",
+parser = argparse.ArgumentParser(description = "test neural network. output truth and predictions from each member and ensemble mean for each forecast hour",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument('--batchsize', type=int, default=512, help="nn training batch size")
+parser.add_argument('--batchsize', type=int, default=512, help="nn training batch size") # tf default is 32
 parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")
 parser.add_argument("-d", "--debug", action='store_true')
 parser.add_argument('--nfits', type=int, default=10, help="number of times to fit (train) model")
 parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
 parser.add_argument('--flash', type=int, default=10, help="GLM flash threshold")
 parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
-parser.add_argument('--model_fname', type=str, help="filename of machine learning model")
+parser.add_argument('--model', type=str, choices=["HRRR","NSC3km-12sec"], default="HRRR", help="prediction model")
+parser.add_argument("--noglm", action='store_true', help='Do not use GLM')
+parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
 parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
 parser.add_argument('--nprocs', type=int, default=12, help="verify this many forecast hours in parallel")
 parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
-parser.add_argument('--suite', type=str, default='sobash.noN7', help="name for group of features")
+parser.add_argument('--suite', type=str, default='sobash', help="name for suite of training features")
 parser.add_argument('--twin', type=int, default=2, help="time window in hours")
 
 
@@ -54,10 +56,12 @@ epochs                = args.epochs
 flash                 = args.flash
 nfit                  = args.nfits
 layer                 = args.layers
+model                 = args.model
 neurons               = args.neurons
+noglm                 = args.noglm
 nprocs                = args.nprocs
 rptdist               = args.rptdist
-savedmodel            = args.model_fname
+savedmodel            = args.savedmodel
 suite                 = args.suite
 twin                  = args.twin
 
@@ -76,7 +80,7 @@ if savedmodel:
 else:
     # use model trained on f01-f48 regardless of the hour you are testing
     fhr_str = 'f01-f48'
-    savedmodel = f"{suite}.{flash}flash_{twin}hr.rpt_{rptdist}km_{twin}hr.{neurons[0]}n.ep{epochs}.{fhr_str}.bs{batchsize}.{layer}layer"
+    savedmodel = f"{model}.{suite}.{flash}flash_{twin}hr.rpt_{rptdist}km_{twin}hr.{neurons[0]}n.ep{epochs}.{fhr_str}.bs{batchsize}.{layer}layer"
 logging.info(f"savedmodel={savedmodel}")
 
 for i in range(0,nfit):
@@ -87,7 +91,8 @@ nextfit = f"nn/nn_{savedmodel}_{i+1}"
 if os.path.exists(nextfit):
     logging.warning(f"next fit exists ({nextfit}). Are you sure nfit only {nfit}?")
 
-odir = os.path.join("/glade/scratch", os.getenv("USER"), "GLM")
+odir = os.path.join("/glade/scratch", os.getenv("USER"))
+if not noglm: odir = os.path.join(odir, "GLM")
 if not os.path.exists(odir):
     logging.info(f"making directory {odir}")
     os.mkdir(odir)
@@ -98,16 +103,30 @@ logging.info(f"output file will be {ofile}")
 ##################################
 
 
-logging.info("read HRRR predictors")
-ifile0 = '/glade/work/ahijevyc/NSC_objects/HRRR/sobash_test_Mar-Oct2021.par'
-if "noN7" in suite: ifile0 = '/glade/work/ahijevyc/NSC_objects/HRRR/sobash.noN7_Mar-Oct2021.par'
+logging.info(f"Read {model} predictors")
+if model == "HRRR":
+    ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/sobash_test_Mar-Oct2021.par'
+    if "noN7" in suite: ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/sobash.noN7_Mar-Oct2021.par'
+    scalingfile = "/glade/work/ahijevyc/NSC_objects/HRRR/scaling_values_all_HRRRX.pk"
+    nfhr = 48
+elif model == "NSC3km-12sec":
+    ifile0 = f'{model}.{suite}_test.par'
+    scalingfile = f"scaling_values_{model}.pk"
+    nfhr = 36
+
+
 if os.path.exists(ifile0):
     logging.info(f'reading {ifile0}')
     df = pd.read_parquet(ifile0, engine="pyarrow")
 else:
-    ifiles = glob.glob(f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_20210[3-9]??00-0000.par')
-    ifiles.extend(glob.glob(f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202110??00-0000.par'))
-    logging.info(f"Reading {len(ifiles)} HRRR files")
+    if model == "HRRR":
+        ifiles = glob.glob(f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_20210[3-9]??00-0000.par')
+        ifiles.extend(glob.glob(f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202110??00-0000.par'))
+    elif model == "NSC3km-12sec":
+        logging.info(f"define vx period for {model}")
+        ifiles = glob.glob(f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_201905??00-0000.par')
+
+    logging.info(f"Reading {len(ifiles)} {model} files")
     df = pd.concat( pd.read_parquet(ifile, engine="pyarrow") for ifile in ifiles)
 
     N7_columns = [x for x in df.columns if "-N7" in x]
@@ -124,10 +143,11 @@ else:
     df = decompose_circular_feature(df, "Local_Solar_Hour", period=24)
     df = df.set_index(["valid_time","projection_y_coordinate","projection_x_coordinate"])
 
-    glm = get_glm(twin,rptdist)
-    glm = glm.drop_vars(["lon","lat"]) # Don't interfere with HRRR lat and lon.
-    logging.info("Merge flashes with df")
-    df = df.merge(glm.to_dataframe(), on=df.index.names)
+    if not noglm:
+        glm = get_glm(twin,rptdist)
+        glm = glm.drop_vars(["lon","lat"]) # Don't interfere with HRRR lat and lon.
+        logging.info("Merge flashes with df")
+        df = df.merge(glm.to_dataframe(), on=df.index.names)
 
     logging.info(f'writing parquet {ifile0}')
     df.to_parquet(ifile0)
@@ -135,16 +155,25 @@ else:
 
 df, rptcols = rptdist2bool(df, rptdist, twin)
 
-df["flashes"] = df["flashes"] >= flash
-label_list = rptcols + ["flashes"] 
-labels = df[label_list] # converted to Boolean above
-df = df.drop(columns=label_list)
+if not noglm:
+    df["flashes"] = df["flashes"] >= flash
+    rptcols.append("flashes")
+
+labels = df[rptcols] # converted to Boolean above
+df = df.drop(columns=rptcols)
+
+
+if (df["HAILCAST_DIAM_MAX"] == 0).all():
+    logging.info("HAILCAST_DIAM_MAX all zeros. Dropping.")
+    df = df.drop(columns="HAILCAST_DIAM_MAX")
+
 
 df.info()
 print(labels.sum())
 
 logging.info("normalize with training cases mean and std.")
-df_desc = pd.read_pickle("/glade/work/ahijevyc/NSC_objects/HRRR/scaling_values_all_HRRRX.pk") # conda activate tf if AttributeError: Can't get attribute 'new_block' on...
+df_desc = pd.read_pickle(scalingfile) # conda activate tf if AttributeError: Can't get attribute 'new_block' on...
+
 if "noN7" in suite:
     assert all("-N7" not in x for x in df.columns), "-N7 in df. expected them to be dropped already"
     N7_columns = [x for x in df_desc.columns if "-N7" in x]
@@ -153,7 +182,8 @@ if "noN7" in suite:
 
 
 assert labels.sum().all() > 0, "at least 1 class has no True labels in testing set"
- 
+
+
 def statjob(fhr,statcurves=False):
     if statcurves:
         fig = plt.figure(figsize=(10,7))
@@ -181,7 +211,7 @@ def statjob(fhr,statcurves=False):
         logging.info(f"loading {model_i}")
         model = load_model(model_i, custom_objects=dict(brier_skill_score=brier_skill_score))
         logging.info(f"predicting...")
-        y_pred = model.predict(df_fhr.to_numpy())
+        y_pred = model.predict(df_fhr.to_numpy(dtype='float32'))
         y_pred = pd.DataFrame(y_pred, columns=labels_fhrs.columns, index=df_fhr.index)
         y_pred = pd.concat([y_pred], keys=[i], names=["fit"]) # add fit level
         y_preds = y_preds.append(y_pred)
@@ -216,7 +246,7 @@ def statjob(fhr,statcurves=False):
             ax1 = plt.subplot2grid((3,2), (0,0), rowspan=2)
             ax2 = plt.subplot2grid((3,2), (2,0), rowspan=1, sharex=ax1)
             ROC_ax = plt.subplot2grid((3,2), (0,1), rowspan=2)
-            reliability_diagram, = reliability_diagram(ax1, labels_fhr, y_pred)
+            reliability_diagram_obj, = reliability_diagram(ax1, labels_fhr, y_pred)
             counts, bins, patches = count_histogram(ax2, y_pred)
             rc = ROC_curve(ROC_ax, labels_fhr, y_pred, fill=False, plabel=False)
             fig.suptitle(f"{suite} {cl}")
@@ -227,7 +257,11 @@ def statjob(fhr,statcurves=False):
             plt.clf()
     return stattxt
 
-fhrs = range(1,49)
+if debug:
+    data = statjob(12,statcurves=True)
+    sys.exit(0)
+
+fhrs = range(1,nfhr+1)
 # Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
 # execcasper --ngpus=13 --mem=50GB # gpus not neeeded for verification
 chunksize = int(np.ceil(len(fhrs)/float(nprocs)))
@@ -239,4 +273,4 @@ with open(ofile, "w") as fh:
     fh.write('class,mem,fhr,bss,base rate,auc\n')
     fh.write(''.join(data))
 
-logging.info(f"wrote {ofile}. Plot with ~ahijevyc/bin/nn_scores.py")
+logging.info(f"wrote {ofile}. Plot with nn_scores.py")
