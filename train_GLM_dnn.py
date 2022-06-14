@@ -138,7 +138,9 @@ def main():
         pass
     else:
         fhr_str = make_fhr_str(fhr) # abbreviate list of forecast hours with hyphens (where possible) so model name is not too long for tf. 
-        savedmodel = f"{model}.{suite}.{flash}flash_{twin}hr.rpt_{rptdist}km_{twin}hr.{neurons[0]}n.ep{epochs}.{fhr_str}.bs{batchsize}.{layer}layer"
+        glmstr = f"{flash}flash_{twin}hr." # flash rate threshold and GLM time window
+        if noglm: glmstr = "" # noglm means no GLM description 
+        savedmodel = f"{model}.{suite}.{glmstr}rpt_{rptdist}km_{twin}hr.{neurons[0]}n.ep{epochs}.{fhr_str}.bs{batchsize}.{layer}layer"
     logging.info(f"savedmodel={savedmodel}")
 
     ##################################

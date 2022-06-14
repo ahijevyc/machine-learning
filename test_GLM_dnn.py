@@ -28,7 +28,7 @@ import yaml
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 # =============Arguments===================
-parser = argparse.ArgumentParser(description = "test neural network. output truth and predictions from each member and ensemble mean for each forecast hour",
+parser = argparse.ArgumentParser(description = "test neural network(s) in parallel. output truth and predictions from each member and ensemble mean for each forecast hour",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--batchsize', type=int, default=512, help="nn training batch size") # tf default is 32
 parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")
@@ -80,12 +80,14 @@ if savedmodel:
 else:
     # use model trained on f01-f48 regardless of the hour you are testing
     fhr_str = 'f01-f48'
-    savedmodel = f"{model}.{suite}.{flash}flash_{twin}hr.rpt_{rptdist}km_{twin}hr.{neurons[0]}n.ep{epochs}.{fhr_str}.bs{batchsize}.{layer}layer"
+    glmstr = f"{flash}flash_{twin}hr." # flash rate threshold and GLM time window
+    if noglm: glmstr = "" # noglm means no GLM description 
+    savedmodel = f"{model}.{suite}.{glmstr}rpt_{rptdist}km_{twin}hr.{neurons[0]}n.ep{epochs}.{fhr_str}.bs{batchsize}.{layer}layer"
 logging.info(f"savedmodel={savedmodel}")
 
 for i in range(0,nfit):
-    model_i = f"nn/nn_{savedmodel}_{i}"
-    assert os.path.exists(model_i), f"{model_i} not found"
+    savedmodel_i = f"nn/nn_{savedmodel}_{i}"
+    assert os.path.exists(savedmodel_i), f"{savedmodel_i} not found"
 
 nextfit = f"nn/nn_{savedmodel}_{i+1}"
 if os.path.exists(nextfit):
@@ -123,8 +125,10 @@ else:
         ifiles = glob.glob(f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_20210[3-9]??00-0000.par')
         ifiles.extend(glob.glob(f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202110??00-0000.par'))
     elif model == "NSC3km-12sec":
-        logging.info(f"define vx period for {model}")
-        ifiles = glob.glob(f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_201905??00-0000.par')
+        logging.info(f"ingest vx period for {model} (after 20160701)")
+        ifiles = glob.glob(f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_20160[789]??00-0000.par')
+        ifiles.extend(glob.glob(f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_20161???00-0000.par'))
+        ifiles.extend(glob.glob(f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_201[789]????00-0000.par'))
 
     logging.info(f"Reading {len(ifiles)} {model} files")
     df = pd.concat( pd.read_parquet(ifile, engine="pyarrow") for ifile in ifiles)
@@ -167,7 +171,8 @@ if (df["HAILCAST_DIAM_MAX"] == 0).all():
     logging.info("HAILCAST_DIAM_MAX all zeros. Dropping.")
     df = df.drop(columns="HAILCAST_DIAM_MAX")
 
-
+validtimes = df.index.get_level_values(level="valid_time")
+logging.info(f"first valid time: {validtimes.min()}  last valid time: {validtimes.max()}")
 df.info()
 print(labels.sum())
 
@@ -195,10 +200,10 @@ def statjob(fhr,statcurves=False):
     logging.debug(f"normalize {fhr}")
     df_fhr = (df_fhr - df_desc.loc["mean"]) / df_desc.loc["std"]
     stattxt = ""
-    for i in range(nfit):
-        model_i = f"nn/nn_{savedmodel}_{i}"
-        logging.debug(f"reading {model_i} column order")
-        yl = yaml.load(open(os.path.join(model_i, "columns.yaml"),"r"), Loader=yaml.FullLoader)
+    for thisfit in range(nfit):
+        savedmodel_thisfit = f"nn/nn_{savedmodel}_{thisfit}"
+        logging.debug(f"reading {savedmodel_thisfit} column order")
+        yl = yaml.load(open(os.path.join(savedmodel_thisfit, "columns.yaml"),"r"), Loader=yaml.FullLoader)
         yl_labels = yl["labels"]
         del(yl["labels"]) # delete labels so we can make DataFrame from rest of dictionary.
         assert all(yl_labels == labels.columns), f"labels {label.columns} don't match when model was trained {yl_labels}"
@@ -208,50 +213,50 @@ def statjob(fhr,statcurves=False):
             logging.info(f"reordering columns")
             df_fhr = df_fhr.reindex(columns=yl.columns)
         assert all(yl.columns == df_fhr.columns), f"columns {df.columns} don't match when model was trained {columns}"
-        logging.info(f"loading {model_i}")
-        model = load_model(model_i, custom_objects=dict(brier_skill_score=brier_skill_score))
+        logging.info(f"loading {savedmodel_thisfit}")
+        model = load_model(savedmodel_thisfit, custom_objects=dict(brier_skill_score=brier_skill_score))
         logging.info(f"predicting...")
-        y_pred = model.predict(df_fhr.to_numpy(dtype='float32'))
-        y_pred = pd.DataFrame(y_pred, columns=labels_fhrs.columns, index=df_fhr.index)
-        y_pred = pd.concat([y_pred], keys=[i], names=["fit"]) # add fit level
-        y_preds = y_preds.append(y_pred)
-        for cl in labels_fhrs.columns:
-            y_pred = y_preds.xs(i, level="fit")[cl]
-            labels_fhr = labels_fhrs[cl]
-            assert labels_fhr.index.equals(y_pred.index), f'fit {i} {cl} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
+        y_pred = model.predict(df_fhr.to_numpy(dtype='float32')) # Grab numpy array of predictions.
+        y_pred = pd.DataFrame(y_pred, columns=labels_fhrs.columns, index=df_fhr.index) # Convert prediction numpy array to DataFrame with index (row) and column labels.
+        y_pred = pd.concat([y_pred], keys=[thisfit], names=["fit"]) # make prediction DataFrame a multilevel DataFrame by prepending the index with another level called "fit"
+        y_preds = y_preds.append(y_pred) # append this fit to the y_preds DataFrame
+        for rptcol in labels_fhrs.columns: # for each report type
+            y_pred = y_preds.xs(thisfit, level="fit")[rptcol] # Grab this particular report type
+            labels_fhr = labels_fhrs[rptcol]
+            assert labels_fhr.index.equals(y_pred.index), f'fit {thisfit} {rptcol} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
             bss = brier_skill_score(labels_fhr, y_pred)
             base_rate = labels_fhr.mean()
             auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
-            logging.info(f"{cl} fit={i} fhr={fhr} {bss} {base_rate} {auc}")
-            stattxt += f"{cl},{i},{fhr},{bss},{base_rate},{auc}\n"
-    ensmean = y_preds.groupby(level=[1,2,3]).mean() # average probability over nfits 
-    assert "fit" not in ensmean.index.names, "fit should not be in average probability over nfits"
+            logging.info(f"{rptcol} fit={thisfit} fhr={fhr} {bss} {base_rate} {auc}")
+            stattxt += f"{rptcol},{thisfit},{fhr},{bss},{base_rate},{auc}\n"
+    ensmean = y_preds.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate"]).mean() # average probability over nfits 
+    assert "fit" not in ensmean.index.names, "fit should not be a MultiIndex level of ensmean, the average probability over nfits."
     # write predictions from each member and ensemble mean and the observed truth. (for debugging). 
     ofile = os.path.join(odir, f"f{fhr:02d}.csv")
     pd.concat([labels_fhrs.astype(int)], keys=["obs"], names=["fit"]).append(y_preds).to_csv(ofile)
     thissavedmodel = savedmodel.replace('f01-f48', f'f{fhr:02d}')
     logging.debug(f"getting bss, base rate, auc")
-    for cl in labels_fhrs.columns:
-        y_pred = ensmean[cl]
-        labels_fhr = labels_fhrs[cl]
+    for rptcol in labels_fhrs.columns:
+        y_pred = ensmean[rptcol]
+        labels_fhr = labels_fhrs[rptcol]
         labels_fhr = labels_fhr.reindex_like(y_pred) # valid_time is sorted in y_pred, not labels_fhr
-        assert labels_fhr.index.equals(y_pred.index), f'{cl} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
+        assert labels_fhr.index.equals(y_pred.index), f'{rptcol} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
         bss = brier_skill_score(labels_fhr, y_pred)
         base_rate = labels_fhr.mean()
         auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
-        logging.info(f"{cl} ensmean fhr={fhr} {bss} {base_rate} {auc}")
-        stattxt += f"{cl},ensmean,{fhr},{bss},{base_rate},{auc}\n"
+        logging.info(f"{rptcol} ensmean fhr={fhr} {bss} {base_rate} {auc}")
+        stattxt += f"{rptcol},ensmean,{fhr},{bss},{base_rate},{auc}\n"
         if statcurves:
-            logging.info(f"{cl} reliability diagram, histogram, & ROC curve")
+            logging.info(f"{rptcol} reliability diagram, histogram, & ROC curve")
             ax1 = plt.subplot2grid((3,2), (0,0), rowspan=2)
             ax2 = plt.subplot2grid((3,2), (2,0), rowspan=1, sharex=ax1)
             ROC_ax = plt.subplot2grid((3,2), (0,1), rowspan=2)
             reliability_diagram_obj, = reliability_diagram(ax1, labels_fhr, y_pred)
             counts, bins, patches = count_histogram(ax2, y_pred)
             rc = ROC_curve(ROC_ax, labels_fhr, y_pred, fill=False, plabel=False)
-            fig.suptitle(f"{suite} {cl}")
+            fig.suptitle(f"{suite} {rptcol}")
             fig.text(0.5, 0.01, ' '.join(df.columns), wrap=True, fontsize=5)
-            ofile = f"nn/{thissavedmodel}.{cl}.statcurves.png"
+            ofile = f"nn/{thissavedmodel}.{rptcol}.statcurves.png"
             fig.savefig(ofile)
             logging.info(os.path.realpath(ofile))
             plt.clf()
@@ -263,7 +268,7 @@ if debug:
 
 fhrs = range(1,nfhr+1)
 # Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
-# execcasper --ngpus=13 --mem=50GB # gpus not neeeded for verification
+# execcasper --ncpus=13 --mem=50GB # gpus not neeeded for verification
 chunksize = int(np.ceil(len(fhrs)/float(nprocs)))
 pool = multiprocessing.Pool(processes=nprocs)
 data = pool.map(statjob, fhrs, chunksize)
@@ -273,4 +278,4 @@ with open(ofile, "w") as fh:
     fh.write('class,mem,fhr,bss,base rate,auc\n')
     fh.write(''.join(data))
 
-logging.info(f"wrote {ofile}. Plot with nn_scores.py")
+logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")
