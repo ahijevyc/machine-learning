@@ -65,6 +65,46 @@ optional arguments:
 
 ```
 
+## Test Dense Neural Network
+
+test_GLM_dnn.py
+
+```
+usage: test_GLM_dnn.py [-h] [--batchsize BATCHSIZE] [--clobber] [-d]
+                       [--nfits NFITS] [--epochs EPOCHS] [--flash FLASH]
+                       [--layers LAYERS] [--model {HRRR,NSC3km-12sec}]
+                       [--noglm] [--savedmodel SAVEDMODEL]
+                       [--neurons NEURONS [NEURONS ...]] [--nprocs NPROCS]
+                       [--rptdist RPTDIST] [--suite SUITE] [--twin TWIN]
+
+test neural network(s) in parallel. output truth and predictions from each
+member and ensemble mean for each forecast hour
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --batchsize BATCHSIZE
+                        nn training batch size (default: 512)
+  --clobber             overwrite any old outfile, if it exists (default:
+                        False)
+  -d, --debug
+  --nfits NFITS         number of times to fit (train) model (default: 10)
+  --epochs EPOCHS       number of training epochs (default: 30)
+  --flash FLASH         GLM flash threshold (default: 10)
+  --layers LAYERS       number of hidden layers (default: 2)
+  --model {HRRR,NSC3km-12sec}
+                        prediction model (default: HRRR)
+  --noglm               Do not use GLM (default: False)
+  --savedmodel SAVEDMODEL
+                        filename of machine learning model (default: None)
+  --neurons NEURONS [NEURONS ...]
+                        number of neurons in each nn layer (default: [16])
+  --nprocs NPROCS       verify this many forecast hours in parallel (default:
+                        12)
+  --rptdist RPTDIST     severe weather report max distance (default: 40)
+  --suite SUITE         name for suite of training features (default: sobash)
+  --twin TWIN           time window in hours (default: 2)
+```
+
 ### history notes
 accidentally deleted all important .py scripts (except HWT_mode_train.py) by adding them to git
 and removing .git directory. I was trying to change branch from master to main.
