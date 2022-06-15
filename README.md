@@ -14,10 +14,10 @@ pip install .
 
 ## Train Dense Neural Network
 
-train_GLM_dnn.py
+train_stormrpts_dnn.py
 
 ```
-usage: train_GLM_dnn.py [-h] [--batchsize BATCHSIZE] [--clobber] [-d]
+usage: train_stormrpts_dnn.py [-h] [--batchsize BATCHSIZE] [--clobber] [-d]
                         [--dropouts DROPOUTS [DROPOUTS ...]]
                         [--fhr FHR [FHR ...]] [--fits FITS [FITS ...]]
                         [--nfits NFITS] [--epochs EPOCHS] [--flash FLASH]
@@ -51,7 +51,7 @@ optional arguments:
   --layers LAYERS       number of hidden layers (default: 2)
   --model {HRRR,NSC3km-12sec}
                         prediction model (default: HRRR)
-  --noglm               Do not use GLM (default: False)
+  --glm                 use GLM (default: False)
   --savedmodel SAVEDMODEL
                         filename of machine learning model (default: None)
   --neurons NEURONS [NEURONS ...]
@@ -67,10 +67,10 @@ optional arguments:
 
 ## Test Dense Neural Network
 
-test_GLM_dnn.py
+test_stormrpts_dnn.py
 
 ```
-usage: test_GLM_dnn.py [-h] [--batchsize BATCHSIZE] [--clobber] [-d]
+usage: test_stormrpts_dnn.py [-h] [--batchsize BATCHSIZE] [--clobber] [-d]
                        [--nfits NFITS] [--epochs EPOCHS] [--flash FLASH]
                        [--layers LAYERS] [--model {HRRR,NSC3km-12sec}]
                        [--noglm] [--savedmodel SAVEDMODEL]
@@ -93,7 +93,7 @@ optional arguments:
   --layers LAYERS       number of hidden layers (default: 2)
   --model {HRRR,NSC3km-12sec}
                         prediction model (default: HRRR)
-  --noglm               Do not use GLM (default: False)
+  --glm                 use GLM (default: False)
   --savedmodel SAVEDMODEL
                         filename of machine learning model (default: None)
   --neurons NEURONS [NEURONS ...]
