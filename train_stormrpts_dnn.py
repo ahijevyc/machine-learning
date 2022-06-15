@@ -95,7 +95,7 @@ def main():
     parser.add_argument('--flash', type=int, default=10, help="GLM flash threshold")
     parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
     parser.add_argument('--model', type=str, choices=["HRRR","NSC3km-12sec"], default="HRRR", help="prediction model")
-    parser.add_argument("--noglm", action='store_true', help='Do not use GLM')
+    parser.add_argument("--glm", action='store_true', help='Use GLM')
     parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
     parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
     parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
@@ -115,7 +115,7 @@ def main():
     fhr                   = args.fhr
     fits                  = args.fits
     nfit                  = args.nfits
-    noglm                 = args.noglm
+    glm                   = args.glm
     layer                 = args.layers
     model                 = args.model
     neurons               = args.neurons
@@ -138,8 +138,8 @@ def main():
         pass
     else:
         fhr_str = make_fhr_str(fhr) # abbreviate list of forecast hours with hyphens (where possible) so model name is not too long for tf. 
-        glmstr = f"{flash}flash_{twin}hr." # flash rate threshold and GLM time window
-        if noglm: glmstr = "" # noglm means no GLM description 
+        glmstr = "" # no GLM description 
+        if glm: glmstr = f"{flash}flash_{twin}hr." # flash rate threshold and GLM time window
         savedmodel = f"{model}.{suite}.{glmstr}rpt_{rptdist}km_{twin}hr.{neurons[0]}n.ep{epochs}.{fhr_str}.bs{batchsize}.{layer}layer"
     logging.info(f"savedmodel={savedmodel}")
 
@@ -207,13 +207,13 @@ def main():
         logging.info(f"writing {ifile}")
         df.to_parquet(ifile)
 
-    if not noglm:
+    if glm:
         latest_valid_time = df.index.max()[0]
         assert latest_valid_time > pd.to_datetime("20160101"), "DataFrame completely before GLM exists"
-        glm = get_glm(twin, rptdist)
+        glmds = get_glm(twin, rptdist)
         logging.info("Merge flashes with df")
         #Do {model} and GLM overlap at all?"
-        df = df.merge(glm.to_dataframe(), on=df.index.names)
+        df = df.merge(glmds.to_dataframe(), on=df.index.names)
         assert not df.empty, f"Merged Dataset is empty."
     
     df, rptcols = rptdist2bool(df, rptdist, twin)
@@ -231,10 +231,10 @@ def main():
     # speed things up without multiindex
     df = df.reset_index(drop=True)
 
-    if not noglm:
+    if glm:
         # Sanity check--make sure prediction model and GLM grid box lat lons are similar
-        assert (df.lon_y - df.lon_x).max() < 0.1, "{model} and glm longitudes don't match"
-        assert (df.lat_y - df.lat_x).max() < 0.1, "{model} and glm lats don't match"
+        assert (df.lon_y - df.lon_x).max() < 0.1, f"{model} and glm longitudes don't match"
+        assert (df.lat_y - df.lat_x).max() < 0.1, f"{model} and glm lats don't match"
         df = df.drop(columns=["lon_y","lat_y"])
         df = df.rename(columns=dict(lon_x="lon",lat_x="lat")) # helpful for scale factor pickle file.
         df["flashes"] = df["flashes"] >= flash

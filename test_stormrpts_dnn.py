@@ -27,28 +27,30 @@ import yaml
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
-# =============Arguments===================
-parser = argparse.ArgumentParser(description = "test neural network(s) in parallel. output truth and predictions from each member and ensemble mean for each forecast hour",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument('--batchsize', type=int, default=512, help="nn training batch size") # tf default is 32
-parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")
-parser.add_argument("-d", "--debug", action='store_true')
-parser.add_argument('--nfits', type=int, default=10, help="number of times to fit (train) model")
-parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
-parser.add_argument('--flash', type=int, default=10, help="GLM flash threshold")
-parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
-parser.add_argument('--model', type=str, choices=["HRRR","NSC3km-12sec"], default="HRRR", help="prediction model")
-parser.add_argument("--noglm", action='store_true', help='Do not use GLM')
-parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
-parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
-parser.add_argument('--nprocs', type=int, default=12, help="verify this many forecast hours in parallel")
-parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
-parser.add_argument('--suite', type=str, default='sobash', help="name for suite of training features")
-parser.add_argument('--twin', type=int, default=2, help="time window in hours")
+def parse_args():
+    # =============Arguments===================
+    parser = argparse.ArgumentParser(description = "test neural network(s) in parallel. output truth and predictions from each member and ensemble mean for each forecast hour",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--batchsize', type=int, default=512, help="nn training batch size") # tf default is 32
+    parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")
+    parser.add_argument("-d", "--debug", action='store_true')
+    parser.add_argument('--nfits', type=int, default=10, help="number of times to fit (train) model")
+    parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
+    parser.add_argument('--flash', type=int, default=10, help="GLM flash threshold")
+    parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
+    parser.add_argument('--model', type=str, choices=["HRRR","NSC3km-12sec"], default="HRRR", help="prediction model")
+    parser.add_argument("--glm", action='store_true', help='Use GLM')
+    parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
+    parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
+    parser.add_argument('--nprocs', type=int, default=12, help="verify this many forecast hours in parallel")
+    parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
+    parser.add_argument('--suite', type=str, default='sobash', help="name for suite of training features")
+    parser.add_argument('--twin', type=int, default=2, help="time window in hours")
+    args = parser.parse_args()
+    return args
 
-
+args = parse_args()
 # Assign arguments to simple-named variables
-args = parser.parse_args()
 batchsize             = args.batchsize
 clobber               = args.clobber
 debug                 = args.debug
@@ -58,7 +60,7 @@ nfit                  = args.nfits
 layer                 = args.layers
 model                 = args.model
 neurons               = args.neurons
-noglm                 = args.noglm
+glm                   = args.glm
 nprocs                = args.nprocs
 rptdist               = args.rptdist
 savedmodel            = args.savedmodel
@@ -80,8 +82,8 @@ if savedmodel:
 else:
     # use model trained on f01-f48 regardless of the hour you are testing
     fhr_str = 'f01-f48'
-    glmstr = f"{flash}flash_{twin}hr." # flash rate threshold and GLM time window
-    if noglm: glmstr = "" # noglm means no GLM description 
+    glmstr = "" # GLM description 
+    if glm: glmstr = f"{flash}flash_{twin}hr." # flash rate threshold and GLM time window
     savedmodel = f"{model}.{suite}.{glmstr}rpt_{rptdist}km_{twin}hr.{neurons[0]}n.ep{epochs}.{fhr_str}.bs{batchsize}.{layer}layer"
 logging.info(f"savedmodel={savedmodel}")
 
@@ -94,7 +96,7 @@ if os.path.exists(nextfit):
     logging.warning(f"next fit exists ({nextfit}). Are you sure nfit only {nfit}?")
 
 odir = os.path.join("/glade/scratch", os.getenv("USER"))
-if not noglm: odir = os.path.join(odir, "GLM")
+if glm: odir = os.path.join(odir, "GLM")
 if not os.path.exists(odir):
     logging.info(f"making directory {odir}")
     os.mkdir(odir)
@@ -147,11 +149,11 @@ else:
     df = decompose_circular_feature(df, "Local_Solar_Hour", period=24)
     df = df.set_index(["valid_time","projection_y_coordinate","projection_x_coordinate"])
 
-    if not noglm:
-        glm = get_glm(twin,rptdist)
-        glm = glm.drop_vars(["lon","lat"]) # Don't interfere with HRRR lat and lon.
+    if glm:
+        glmds = get_glm(twin,rptdist)
+        glmds = glmds.drop_vars(["lon","lat"]) # Don't interfere with HRRR lat and lon.
         logging.info("Merge flashes with df")
-        df = df.merge(glm.to_dataframe(), on=df.index.names)
+        df = df.merge(glmds.to_dataframe(), on=df.index.names)
 
     logging.info(f'writing parquet {ifile0}')
     df.to_parquet(ifile0)
@@ -159,7 +161,7 @@ else:
 
 df, rptcols = rptdist2bool(df, rptdist, twin)
 
-if not noglm:
+if glm:
     df["flashes"] = df["flashes"] >= flash
     rptcols.append("flashes")
 
