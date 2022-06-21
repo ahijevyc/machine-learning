@@ -180,6 +180,7 @@ def main():
                 ifiles.extend(glob.glob(search_str))
         elif model == "NSC3km-12sec":
             search_str = f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_201*00-0000.par'
+            search_str = f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_201[0]*00-0000.par' # for debugging
             ifiles = glob.glob(search_str)
 
         # remove larger neighborhood size (fields containing N7 in the name)
@@ -193,6 +194,15 @@ def main():
         logging.info(f"Reading {len(ifiles)} {model} files {search_str}")
         df = pd.concat( pd.read_parquet(ifile, engine="pyarrow", columns=columns) for ifile in ifiles)
         logging.info("done")
+
+        search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation/20*/label_probabilities_201*00_fh_*.nc'
+        search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation/201[0]*/label_probabilities_201*00_fh_*.nc' # for debugging
+        ifiles = sorted(glob.glob(search_str))
+        logging.info(f"Read and merge {len(ifiles)} storm mode files")
+        modeds = xarray.open_mfdataset(ifiles, preprocess=lambda x: x.set_index(time=['init_time','forecast_hour']).unstack('time'))
+        df["Date"] = df.Date.astype('datetime64[ns]')
+        df = df.set_index(["Date","fhr"]).merge(modeds.rename({"init_time":"Date","forecast_hour":"fhr"}).to_dataframe(), on=["Date","fhr"])
+
         df["valid_time"] = pd.to_datetime(df["Date"]) + df["fhr"] * datetime.timedelta(hours=1)
         df["dayofyear"] = df["valid_time"].dt.dayofyear
         df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15

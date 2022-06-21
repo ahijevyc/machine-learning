@@ -19,7 +19,7 @@ def nns(ifile):
 
 def main():
     # =============Arguments===================
-    parser = argparse.ArgumentParser(description = "plot NN verification scores written by GLM_HRRR_test.py, often in /glade/work/ahijevyc/NSC_objects/nn/.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(description = "plot NN verification scores written by test_stormrpts_dnn.py, often in /glade/work/ahijevyc/NSC_objects/nn/.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('ifiles', nargs="+", type=argparse.FileType("r"), help="input file(s)")
     parser.add_argument("--ci", type=int, default=95, help="confidence interval")
     parser.add_argument("-d", "--debug", action="store_true", help="turn on debug mode")

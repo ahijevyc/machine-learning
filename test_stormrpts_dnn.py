@@ -115,7 +115,7 @@ if model == "HRRR":
     nfhr = 48
 elif model == "NSC3km-12sec":
     ifile0 = f'{model}.{suite}_test.par'
-    scalingfile = f"scaling_values_{model}.pk"
+    scalingfile = f"scaling_values_all_{model}.pk"
     nfhr = 36
 
 
@@ -210,7 +210,7 @@ def statjob(fhr,statcurves=False):
         del(yl["labels"]) # delete labels so we can make DataFrame from rest of dictionary.
         assert all(yl_labels == labels.columns), f"labels {label.columns} don't match when model was trained {yl_labels}"
         yl = pd.DataFrame(yl).set_index("columns").T
-        assert np.isclose(yl.reindex(columns=df_desc.columns), df_desc.loc[yl.index]).all(), "pickle and yaml scaling factors don't match up {df_desc} {yl}"
+        assert np.isclose(yl.reindex(columns=df_desc.columns), df_desc.loc[yl.index]).all(), f"pickle and yaml scaling factors don't match up {df_desc} {yl}"
         if not all(yl.columns == df_fhr.columns):
             logging.info(f"reordering columns")
             df_fhr = df_fhr.reindex(columns=yl.columns)
