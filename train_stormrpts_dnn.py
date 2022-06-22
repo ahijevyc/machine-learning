@@ -92,7 +92,7 @@ def main():
     parser.add_argument('--fits', nargs="+", type=int, default=None, help="work on specific fit(s) so you can run many in parallel")
     parser.add_argument('--nfits', type=int, default=10, help="number of times to fit (train) model")
     parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
-    parser.add_argument('--flash', type=int, default=10, help="GLM flash threshold")
+    parser.add_argument('--flash', type=int, default=10, help="GLM flash count threshold")
     parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
     parser.add_argument('--model', type=str, choices=["HRRR","NSC3km-12sec"], default="HRRR", help="prediction model")
     parser.add_argument("--glm", action='store_true', help='Use GLM')
@@ -164,7 +164,7 @@ def main():
         if alsoHRRRv4: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.noN7.par'
         scalingfile = f"/glade/work/ahijevyc/NSC_objects/{model}/scaling_values_all_HRRRX.pk"
     elif model == "NSC3km-12sec":
-        ifile = f'{model}.par'
+        ifile = f'{model}{glmstr}.par'
         scalingfile = f"scaling_values_{model}.pk"
 
     if os.path.exists(ifile):
@@ -180,40 +180,53 @@ def main():
                 ifiles.extend(glob.glob(search_str))
         elif model == "NSC3km-12sec":
             search_str = f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_201*00-0000.par'
-            search_str = f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_201[0]*00-0000.par' # for debugging
             ifiles = glob.glob(search_str)
 
-        # remove larger neighborhood size (fields containing N7 in the name)
+        # remove largest neighborhood size (fields containing N7 in the name)
         df = pd.read_parquet(ifiles[0], engine="pyarrow")
         columns = df.columns
         N7_columns = [x for x in df.columns if "-N7" in x]
         if "noN7" in suite:
             logging.debug(f"ignoring {len(N7_columns)} N7 columns: {N7_columns}")
             columns = set(df.columns) - set(N7_columns)
+
         # all columns including severe reports
         logging.info(f"Reading {len(ifiles)} {model} files {search_str}")
         df = pd.concat( pd.read_parquet(ifile, engine="pyarrow", columns=columns) for ifile in ifiles)
         logging.info("done")
 
+        # Read mode probabilities
         search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation/20*/label_probabilities_201*00_fh_*.nc'
-        search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation/201[0]*/label_probabilities_201*00_fh_*.nc' # for debugging
         ifiles = sorted(glob.glob(search_str))
         logging.info(f"Read and merge {len(ifiles)} storm mode files")
-        modeds = xarray.open_mfdataset(ifiles, preprocess=lambda x: x.set_index(time=['init_time','forecast_hour']).unstack('time'))
-        df["Date"] = df.Date.astype('datetime64[ns]')
-        df = df.set_index(["Date","fhr"]).merge(modeds.rename({"init_time":"Date","forecast_hour":"fhr"}).to_dataframe(), on=["Date","fhr"])
+        modeds = xarray.open_mfdataset( ifiles, preprocess=lambda x: x.set_index(time=['init_time','forecast_hour']) )
+        modeds = modeds.unstack('time')
+        modeds = modeds.where(mask, drop=True)
+        modeds = modeds.reset_coords(["lon","lat"]) 
 
-        df["valid_time"] = pd.to_datetime(df["Date"]) + df["fhr"] * datetime.timedelta(hours=1)
+        # In modeds, x : west to east, y : south to north
+        # In sobash df, x : south to north, y : west to east.
+        modeds = modeds.rename(dict(x="y",y="x",init_time="initialization_time")) #dimensions are renamed to match df.
+
+        # Index df and modeds the same way. 
+        logging.info(f"convert df Date to datetime64[ns]")
+        df["Date"] = df.Date.astype('datetime64[ns]')
+        df = df.rename(columns=dict(yind="y",xind="x",Date="initialization_time",fhr="forecast_hour"))
+        df = df.set_index(["y","x","initialization_time","forecast_hour"])
+        logging.info(f"merge {model} DataFramef with mode Dataset in xarray")
+        ds = df.to_xarray().merge(modeds, join="inner", compat="override") # if you don't use join="inner" you get a lot of NaNs. override to ignore lat/lon mismatch (TODO: why mismatch?)
+        df = ds.to_dataframe().dropna(axis="index") # for some reason there are still nans even after using join="inner" above.
+
+        # Derived fields
         df["dayofyear"] = df["valid_time"].dt.dayofyear
         df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15
         df = decompose_circular_feature(df, "dayofyear", period=365.25)
         df = decompose_circular_feature(df, "Local_Solar_Hour", period=24)
-        df = df.rename(columns=dict(Date="initialization_time", xind="projection_y_coordinate",yind="projection_x_coordinate"))
+        logging.info("convert 64-bit to 32-bit columns")
         dtype_dict =      {k:np.float32 for k in df.select_dtypes(np.float64).columns}
         dtype_dict.update({k:np.int32   for k in df.select_dtypes(np.int64).columns})
-        logging.info("convert 64-bit to 32-bit columns")
         df = df.astype(dtype_dict, copy=False)
-        df = df.set_index(["valid_time","projection_y_coordinate","projection_x_coordinate"])
+        df = df.reset_index().set_index(["valid_time","y","x"])
         logging.info(f"writing {ifile}")
         df.to_parquet(ifile)
 
@@ -224,7 +237,7 @@ def main():
         logging.info("Merge flashes with df")
         #Do {model} and GLM overlap at all?"
         df = df.merge(glmds.to_dataframe(), on=df.index.names)
-        assert not df.empty, f"Merged Dataset is empty."
+        assert not df.empty, f"Merged {model}/GLM Dataset is empty."
     
     df, rptcols = rptdist2bool(df, rptdist, twin)
 

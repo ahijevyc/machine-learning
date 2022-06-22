@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
     parser.add_argument('--nprocs', type=int, default=12, help="verify this many forecast hours in parallel")
     parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
-    parser.add_argument('--suite', type=str, default='default', choices=["default","with_storm_mode"], help="name for suite of training features")
+    parser.add_argument('--suite', type=str, default='default.noN7', choices=["default","default.noN7","with_storm_mode"], help="name for suite of training features")
     parser.add_argument('--twin', type=int, default=2, help="time window in hours")
     args = parser.parse_args()
     return args
@@ -169,7 +169,7 @@ labels = df[rptcols] # converted to Boolean above
 df = df.drop(columns=rptcols)
 
 
-if (df["HAILCAST_DIAM_MAX"] == 0).all():
+if "HAILCAST_DIAM_MAX" in df and (df["HAILCAST_DIAM_MAX"] == 0).all():
     logging.info("HAILCAST_DIAM_MAX all zeros. Dropping.")
     df = df.drop(columns="HAILCAST_DIAM_MAX")
 
@@ -265,7 +265,7 @@ def statjob(fhr,statcurves=False):
     return stattxt
 
 if debug:
-    data = statjob(12,statcurves=True)
+    data = statjob(13,statcurves=True)
     sys.exit(0)
 
 fhrs = range(1,nfhr+1)
