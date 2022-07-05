@@ -14,10 +14,10 @@ sns.set_theme() # pretty axes background and gridlines
 
 def nns(ifile):
     # abbreviate input file name for legend 
-    base, ext = os.path.splitext(ifile)
-    words = base.split('.')
-    words = words[1:-1] # ignore 1st and last words
-    return '.'.join(words)
+    ifile = os.path.realpath(ifile) # absolute path
+    ifile = ifile[ifile.index("/nn/")+4:] # everything after nn/ directory
+    ifile = ifile.replace(".scores.txt","")
+    return ifile
 
 def parse_args():
     # =============Arguments===================
