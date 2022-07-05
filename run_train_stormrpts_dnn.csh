@@ -18,5 +18,5 @@ cd /glade/work/ahijevyc/NSC_objects
 module load conda # if you need conda environment.
 conda activate tf
 
-python train_stormrpts_dnn.py --fit ${fit} --suite with_storm_mode --split 20160701 --model NSC3km-12sec 
+python train_stormrpts_dnn.py --fit ${fit} --suite default --split 20160701 --model NSC3km-12sec 
 EOS

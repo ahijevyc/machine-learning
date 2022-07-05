@@ -197,7 +197,7 @@ def main():
         logging.info("done")
 
         # Read mode probabilities
-        search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation/20*/label_probabilities_20*00_fh_*.nc'
+        search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation_zero_filled/20*/label_probabilities_20*00_fh_*.nc'
         ifiles = sorted(glob.glob(search_str))
         logging.info(f"Read {len(ifiles)} storm mode files")
         modeds = xarray.open_mfdataset( ifiles, preprocess=lambda x: x.set_index(time=['init_time','forecast_hour']) )

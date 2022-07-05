@@ -1,7 +1,6 @@
 import argparse
 import datetime
 import glob
-from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 import logging
 import matplotlib.pyplot as plt
@@ -154,19 +153,22 @@ if glm:
     rptcols.append("flashes")
 
 # This script expects MultiIndex valid_time, projection_y_coordinate, projection_x_coordinate (t, ew, ns)
-xs = df.index.get_level_values(level="x")
-ys = df.index.get_level_values(level="y")
-if xs.min() == 21 and xs.max() == 80 and ys.min() == 12 and ys.max() == 46:
-    rdict = {"y":"projection_x_coordinate", "x":"projection_y_coordinate" }
-    logging.info(f"renaming axes {rdict}")
-    df = df.rename_axis(index=rdict) # NSC3km-12sec saved as forecast_hour, y, x 
-elif ys.min() == 21 and ys.max() == 80 and xs.min() == 12 and xs.max() == 46:
-    rdict = {"x":"projection_x_coordinate", "y":"projection_y_coordinate" }
-    logging.info(f"renaming axes {rdict}")
-    df = df.rename_axis(index=rdict) # NSC3km-12sec saved as forecast_hour, y, x 
+if df.index.names == ["valid_time", "projection_y_coordinate", "projection_x_coordinate"]:
+    pass
 else:
-    logging.error("unexpected x and y coordinates. check mask, training script, parquet file...")
-    sys.exit(1)
+    xs = df.index.get_level_values(level="x")
+    ys = df.index.get_level_values(level="y")
+    if xs.min() == 21 and xs.max() == 80 and ys.min() == 12 and ys.max() == 46:
+        rdict = {"y":"projection_x_coordinate", "x":"projection_y_coordinate" }
+        logging.info(f"renaming axes {rdict}")
+        df = df.rename_axis(index=rdict) # NSC3km-12sec saved as forecast_hour, y, x 
+    elif ys.min() == 21 and ys.max() == 80 and xs.min() == 12 and xs.max() == 46:
+        rdict = {"x":"projection_x_coordinate", "y":"projection_y_coordinate" }
+        logging.info(f"renaming axes {rdict}")
+        df = df.rename_axis(index=rdict) # NSC3km-12sec saved as forecast_hour, y, x 
+    else:
+        logging.error("unexpected x and y coordinates. check mask, training script, parquet file...")
+        sys.exit(1)
 
 # This script expects "forecast_hour" spelled out.
 df = df.rename(columns={"fhr": "forecast_hour", "init_time": "initialization_time"})
@@ -202,7 +204,7 @@ logging.info(f"keep {len(df)}/{before_filtering} cases with init times at or lat
 
 assert labels.sum().all() > 0, "at least 1 class has no True labels in testing set"
 
-logging.info("normalize with training cases mean and std.")
+logging.info(f"normalize with training cases mean and std in {scalingfile}.")
 sv = pd.read_pickle(scalingfile) # conda activate tf if AttributeError: Can't get attribute 'new_block' on...
 if "fhr" in sv:
     logging.info("change fhr to forecast_hour in scaling DataFrame")
@@ -242,7 +244,7 @@ def statjob(fhr,statcurves=False):
         yl_labels = yl["labels"]
         del(yl["labels"]) # delete labels so we can make DataFrame from rest of dictionary.
         assert yl["args"].splittime == train_test_split_time, f"yaml train_test_split_time {yl['args']['train_test_split_time']} does not match value from this script {train_test_split_time}"
-        del(yl["args"]) # could use this later to make sure split_train_test time is the value we expected
+        del(yl["args"]) 
         assert all(yl_labels == labels.columns), f"labels {label.columns} don't match when model was trained {yl_labels}"
         yl = pd.DataFrame(yl).set_index("columns").T
         if "fhr" in yl:
@@ -272,6 +274,7 @@ def statjob(fhr,statcurves=False):
             auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
             logging.info(f"{rpt_type} fit={thisfit} fhr={fhr} {bss} {base_rate} {auc}")
             stattxt += f"{rpt_type},{thisfit},{fhr},{bss},{base_rate},{auc}\n"
+    # TODO: do I have to worry about overlapping valid_times from different init_times?
     ensmean = y_preds.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate"]).mean() # average probability over nfits 
     assert "fit" not in ensmean.index.names, "fit should not be a MultiIndex level of ensmean, the average probability over nfits."
     # write predictions from each member and ensemble mean and the observed truth. (for debugging). 
