@@ -309,6 +309,7 @@ def statjob(fhr,statcurves=False):
     return stattxt
 
 if debug:
+    statjob(24, statcurves=True)
     sys.exit(0)
 
 fhrs = range(1,nfhr+1)
