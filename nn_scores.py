@@ -85,27 +85,32 @@ def main():
             topax.set_xlim(topax.get_xlim()[0], topax.get_xlim()[1]+2) # add space for "ensmean" label
         topax.text(df.fhr.max(), df[imem].groupby("fhr")["bss"].mean().iloc[-1], " bss", **text_kw) # looks better preceded by space
 
-        if len(ifiles) == 2: # Plot difference between 2 input files
-            ddf = df[imem].set_index(["class","mem","fhr","nn"])
+        if len(ifiles) == 2: # Plot difference between 2 input files on bottom axes
+            ddf = df.set_index(["class","mem","fhr","nn"])
             nn0, nn1 = ddf.index.unique(level="nn")
             logging.info(f"difference plot ( {nn0} - {nn1} )")
             diff = ddf.xs(nn0, level="nn") - ddf.xs(nn1, level="nn")
-            sns.lineplot(data=diff, x="fhr", y="bss",  ax=botax, linewidth=lw, **line_kw)
+            imem_diff = diff.index.get_level_values(level="mem") != "ensmean" # can't reuse imem and iens variables; they are used later
+            iens_diff = diff.index.get_level_values(level="mem") == "ensmean"
+            sns.lineplot(data=diff[imem_diff], x="fhr", y="bss",  ax=botax, linewidth=lw, **line_kw)
             botax.set_ylabel(f"bss difference")
             if plotauc:
                 # AUC difference on secondary axis (right side)
                 baxr=botax.twinx()
-                sns.lineplot(data=diff, x="fhr", y="auc",  ax=baxr, linewidth=lw, color="gold", **line_kw)
+                sns.lineplot(data=diff[imem_diff], x="fhr", y="auc",  ax=baxr, linewidth=lw, color="gold", **line_kw)
                 baxr.set_ylabel(f"auc difference")
                 baxr.set_ylim(np.array(botax.get_ylim())/10) # make auc y-limits 1/10th bss y-limits
                 baxr.grid(False) #needs to be after lineplot
             botax.set_title(f"{nn0} - {nn1}", fontsize="small")
+            if ensmean:
+                sns.lineplot(data=diff[iens_diff], x="fhr", y="bss",  ax=botax, color="black", linewidth=lw*0.25, legend=False)
+                botax.text(df.fhr.max(), diff[iens_diff]["bss"].iloc[-1], " ens. mean bss diff", fontsize=7, ha="left", va="center")
 
 
         # Base rate
         sns.lineplot(data=df, x="fhr", y="base rate", ax=topax, style="nn", linewidth=lw, color="red", legend=False)
         topax.set_ylabel(topax.get_ylabel()+" and base rate")
-        topax.text(df.fhr.max(), df["base rate"].iloc[-1], "base\nrate", **text_kw)
+        topax.text(df.fhr.max(), df["base rate"].iloc[-1], "base rate", **text_kw)
         topax.xaxis.set_major_locator(ticker.MultipleLocator(3))
         ylim = (0,0.225)
         if cl == "flashes": ylim = (0,0.6)
