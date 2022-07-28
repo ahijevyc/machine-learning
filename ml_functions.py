@@ -11,8 +11,10 @@ import hwtmode.statisticplot
 import scipy.ndimage.filters
 from sklearn.calibration import calibration_curve
 from sklearn import metrics
+import sys
 from tensorflow import is_tensor
 from tensorflow.keras import backend as K
+from tensorflow.keras import optimizers
 import time, os
 import xarray
 
@@ -33,6 +35,18 @@ def brier_skill_score(obs, preds):
         bss = 1 - bs/bs_climo
 
     return bss
+
+def get_optimizer(s, **kwargs):
+    if s == 'adam':
+        o = optimizers.Adam()
+    elif s == 'sgd':
+        learning_rate = 0.001
+        momentum = 0.99
+        nesterov = True
+        decay = 1e-4 # no place to specify in optimizers.SGD, v2 of tensorflow
+        o = optimizers.SGD(learning_rate=learning_rate, momentum=momentum, decay=decay, nesterov=nesterov, **kwargs)
+    return o
+
 
 def rptdist2bool(df, rptdist, twin):
     # get rid of columns that are not associated with the time window (twin)
@@ -301,3 +315,24 @@ def normalize_multivariate_data(data, features, scaling_values=None, nonormalize
         else:
             print(features[i])
     return normed_data, scaling_values
+
+
+def savedmodel_default(args, fhr_str=None):
+    # Could be 'adam' or SGD from Sobash 2020
+    optimizer = get_optimizer(args.optimizer)
+    
+    if args.batchnorm:
+        batchnorm_str = ".bn"
+    else:
+        batchnorm_str = ""
+    if args.L2:
+        regularizer_name = "L2"
+    else:
+        regularizer_name = "None"
+
+    glmstr = "" # GLM description 
+    if args.glm: glmstr = f"{args.flash}flash_{args.twin}hr." # flash rate threshold and GLM time window
+        
+    savedmodel = f"{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{args.neurons[0]}n.ep{args.epochs}.{fhr_str}.bs{args.batchsize}.{args.layer}layer.{optimizer._name}.{regularizer_name}.{args.dropout}{batchnorm_str}"
+        
+    return savedmodel

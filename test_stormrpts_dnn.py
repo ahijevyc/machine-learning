@@ -4,7 +4,7 @@ import glob
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, rptdist2bool, get_glm
+from ml_functions import brier_skill_score, rptdist2bool, get_glm, get_optimizer, savedmodel_default
 import multiprocessing
 import numpy as np
 import os
@@ -30,38 +30,39 @@ def parse_args():
     # =============Arguments===================
     parser = argparse.ArgumentParser(description = "test neural network(s) in parallel. output truth and predictions from each member and ensemble mean for each forecast hour",
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--batchnorm', action='store_true', help="use batch normalization")
     parser.add_argument('--batchsize', type=int, default=512, help="nn training batch size") # tf default is 32
     parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")
     parser.add_argument("-d", "--debug", action='store_true')
+    parser.add_argument("--dropout", type=float, default=0, help='fraction of neurons to drop in each hidden layer (0-1)')
     parser.add_argument('--nfits', type=int, default=10, help="number of times to fit (train) model")
     parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
     parser.add_argument('--flash', type=int, default=10, help="GLM flash count threshold")
-    parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
+    parser.add_argument('--layer', default=2, type=int, help="number of hidden layers")
+    parser.add_argument("--L2", action='store_true', help='apply L2 regularization')
     parser.add_argument('--model', type=str, choices=["HRRR","NSC3km-12sec"], default="HRRR", help="prediction model")
     parser.add_argument("--glm", action='store_true', help='Use GLM')
     parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
     parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
     parser.add_argument('--nprocs', type=int, default=0, help="verify this many forecast hours in parallel")
+    parser.add_argument('--optimizer', type=str, choices=['adam','sgd'], default='adam', help="optimizer")
     parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
     parser.add_argument('--splittime', type=lambda s: pd.to_datetime(s), default="202012021200", help="train with storms before this time; test this time and after")
-    parser.add_argument('--suite', type=str, default='default', choices=["default","with_storm_mode"], help="name for suite of training features")
+    parser.add_argument('--suite', type=str, default='default', choices=["default","with_storm_mode","with_cnn_storm_mode"], help="name for suite of training features")
     parser.add_argument('--twin', type=int, default=2, help="time window in hours")
     args = parser.parse_args()
     return args
 
 args = parse_args()
 # Assign arguments to simple-named variables
-batchsize             = args.batchsize
 clobber               = args.clobber
 debug                 = args.debug
-epochs                = args.epochs
 flash                 = args.flash
-nfit                  = args.nfits
-layer                 = args.layers
-model                 = args.model
-neurons               = args.neurons
 glm                   = args.glm
+model                 = args.model
+nfit                  = args.nfits
 nprocs                = args.nprocs
+optimizer             = args.optimizer
 rptdist               = args.rptdist
 savedmodel            = args.savedmodel
 train_test_split_time = args.splittime
@@ -75,17 +76,16 @@ if debug:
 
 logging.info(args)
 
+# Could be 'adam' or SGD from Sobash 2020
+optimizer = get_optimizer(optimizer)
+
 ### saved model name ###
 
 trained_models_dir = '/glade/work/ahijevyc/NSC_objects'
 if savedmodel:
     pass
 else:
-    # use model trained on f01-f48 regardless of the hour you are testing
-    fhr_str = 'f01-f48'
-    glmstr = "" # GLM description 
-    if glm: glmstr = f"{flash}flash_{twin}hr." # flash rate threshold and GLM time window
-    savedmodel = f"{model}.{suite}.{glmstr}rpt_{rptdist}km_{twin}hr.{neurons[0]}n.ep{epochs}.{fhr_str}.bs{batchsize}.{layer}layer"
+    savedmodel = savedmodel_default(args, fhr_str='f01-f48') # use model trained on f01-f48 regardless of the hour you are testing
 logging.info(f"savedmodel={savedmodel}")
 
 for i in range(0,nfit):

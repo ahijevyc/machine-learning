@@ -49,7 +49,7 @@ def main():
 
 
     # Figure dimensions, line thicknesses, text alignment
-    fig = plt.figure(figsize=(11,8))
+    fig = plt.figure(figsize=(15,11))
     lw = 2  # line width for mean of members
     text_kw = dict(fontsize=10, ha="left", va="center")
     # If ci is zero, don't plot confidence band; plot individual lines for all members    
@@ -58,7 +58,8 @@ def main():
     else:
         # If ci is not zero plot ci% confidence interval
         line_kw = dict(ci=ci)
-
+    if len(ifiles) > 2 and not plotauc:
+        line_kw.update(dict(hue="nn"))
 
 
     # Read input files into Pandas DataFrame, with nn column = filename
@@ -114,7 +115,8 @@ def main():
         topax.xaxis.set_major_locator(ticker.MultipleLocator(3))
         ylim = (0,0.225)
         if cl == "flashes": ylim = (0,0.6)
-        if cl.startswith("torn") or cl.startswith("sighail"): ylim = (-0.03, 0.1)
+        if cl.startswith("torn") or cl.startswith("sig"): ylim = (-0.03, 0.1)
+        if cl.startswith("hailone"): ylim = (-0.03, 0.15)
         topax.set_ylim(ylim)
 
         if plotauc:
@@ -135,6 +137,13 @@ def main():
         fig.savefig(ofile)
         logging.info(os.path.realpath(ofile))
         plt.clf()
+
+    # average all forecast hours
+    dfs2 = dfs.copy() # remove common prefix from nn (make it shorter) 
+    prefix = os.path.commonprefix(dfs["nn"].tolist())
+    dfs2["nn"] = dfs["nn"].str.replace(prefix,"")
+    timemean = dfs2.groupby(["class","mem","nn"]).mean().xs("ensmean",level="mem")
+    print(timemean)
 
 if __name__ == "__main__":
     main()
