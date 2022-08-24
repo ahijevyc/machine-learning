@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-
+import argparse
 import datetime as dt
 import glob
 import logging
@@ -36,11 +35,38 @@ def brier_skill_score(obs, preds):
 
     return bss
 
-def get_optimizer(s, **kwargs):
+
+def get_argparser():
+    parser = argparse.ArgumentParser(description = "train/test dense neural network", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--batchnorm', action='store_true', help="use batch normalization")
+    parser.add_argument('--batchsize', type=int, default=1024, help="nn training batch size") # tf default is 32
+    parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")
+    parser.add_argument("-d", "--debug", action='store_true')
+    parser.add_argument("--dropout", type=float, default=0, help='fraction of neurons to drop in each hidden layer (0-1)')
+    parser.add_argument('--nfits', type=int, default=5, help="number of times to fit (train) model")
+    parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
+    parser.add_argument('--flash', type=int, default=10, help="GLM flash count threshold")
+    parser.add_argument('--kfold', type=int, default=5, help="apply kfold cross validation to training set")
+    parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
+    parser.add_argument('--learning_rate', type=float, default=0.001, help="learning rate")
+    parser.add_argument('--model', type=str, choices=["HRRR","NSC3km-12sec"], default="HRRR", help="prediction model")
+    parser.add_argument("--glm", action='store_true', help='Use GLM')
+    parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
+    parser.add_argument('--optimizer', type=str, choices=['adam','sgd'], default='adam', help="optimizer")
+    parser.add_argument('--reg_penalty', type=float, default=0.01, help="L2 regularization factor")
+    parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
+    parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
+    parser.add_argument('--splittime', type=lambda s: pd.to_datetime(s), default="202012021200", help="train with storms before this time; test this time and after")
+    parser.add_argument('--suite', type=str, default='default', choices=["default","with_storm_mode","with_cnn_storm_mode"], help="name for suite of training features")
+    parser.add_argument('--twin', type=int, default=2, help="time window in hours")
+    return parser
+
+
+def get_optimizer(s, learning_rate = 0.001, **kwargs):
     if s == 'adam':
-        o = optimizers.Adam()
+        o = optimizers.Adam(learning_rate = learning_rate)
     elif s == 'sgd':
-        learning_rate = 0.001
+        #learning_rate = 0.001 # from sobash
         momentum = 0.99
         nesterov = True
         decay = 1e-4 # no place to specify in optimizers.SGD, v2 of tensorflow
@@ -99,7 +125,7 @@ def get_glm(twin,rptdist,date=None):
         logging.info(f"sum GLM flash counts in {k}x{k} window")
         glm = glm.rolling(x=k, y=k, center=True).sum()
 
-    glm = glm.rename(dict(time_coverage_start="valid_time", y="projection_y_coordinate", x="projection_x_coordinate"))
+    glm = glm.rename(dict(time_coverage_start="valid_time")) #, y="projection_y_coordinate", x="projection_x_coordinate")) # commented out Aug 10, 2022
     return glm
 
 
@@ -325,14 +351,11 @@ def savedmodel_default(args, fhr_str=None):
         batchnorm_str = ".bn"
     else:
         batchnorm_str = ""
-    if args.L2:
-        regularizer_name = "L2"
-    else:
-        regularizer_name = "None"
 
     glmstr = "" # GLM description 
     if args.glm: glmstr = f"{args.flash}flash_{args.twin}hr." # flash rate threshold and GLM time window
         
-    savedmodel = f"{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{args.neurons[0]}n.ep{args.epochs}.{fhr_str}.bs{args.batchsize}.{args.layer}layer.{optimizer._name}.{regularizer_name}.{args.dropout}{batchnorm_str}"
+    savedmodel  = f"{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{args.neurons[0]}n.ep{args.epochs}.{fhr_str}."
+    savedmodel += f"bs{args.batchsize}.{args.layers}layer.{optimizer._name}.L2{args.reg_penalty}.lr{args.learning_rate}.{args.dropout}{batchnorm_str}"
         
     return savedmodel
