@@ -52,7 +52,7 @@ def plot_cv_indices(cv, X, y, group, ax, n_splits, lw=10):
     )
 
     # Formatting
-    yticklabels = list(range(n_splits)) + ["label", "model run"]
+    yticklabels = list(range(n_splits)) + ["label", "group"]
     ax.set(
         yticks=np.arange(n_splits + 2) + 0.5,
         yticklabels=yticklabels,
