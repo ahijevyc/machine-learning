@@ -1,10 +1,11 @@
 import argparse
 import datetime
 import glob
+from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, rptdist2bool, get_glm, get_optimizer, savedmodel_default
+from ml_functions import brier_skill_score, get_argparser, get_glm, rptdist2bool, savedmodel_default
 import multiprocessing
 import numpy as np
 import os
@@ -12,13 +13,15 @@ import pandas as pd
 import pdb
 import pickle
 import sklearn
-from tensorflow.keras.models import load_model
 import sys
+from sklearn.model_selection import KFold
+from tensorflow.keras.models import load_model
 import time
 import xarray
 import yaml
 
 """
+ test neural network(s) in parallel. output truth and predictions from each member and ensemble mean for each forecast hour
  Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
  execcasper --ngpus 13 --mem=50GB # gpus not neeeded for verification
 """
@@ -26,43 +29,33 @@ import yaml
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
-def parse_args():
-    # =============Arguments===================
-    parser = argparse.ArgumentParser(description = "test neural network(s) in parallel. output truth and predictions from each member and ensemble mean for each forecast hour",
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--batchnorm', action='store_true', help="use batch normalization")
-    parser.add_argument('--batchsize', type=int, default=512, help="nn training batch size") # tf default is 32
-    parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")
-    parser.add_argument("-d", "--debug", action='store_true')
-    parser.add_argument("--dropout", type=float, default=0, help='fraction of neurons to drop in each hidden layer (0-1)')
-    parser.add_argument('--nfits', type=int, default=10, help="number of times to fit (train) model")
-    parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
-    parser.add_argument('--flash', type=int, default=10, help="GLM flash count threshold")
-    parser.add_argument('--layer', default=2, type=int, help="number of hidden layers")
-    parser.add_argument("--L2", action='store_true', help='apply L2 regularization')
-    parser.add_argument('--model', type=str, choices=["HRRR","NSC3km-12sec"], default="HRRR", help="prediction model")
-    parser.add_argument("--glm", action='store_true', help='Use GLM')
-    parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
-    parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
-    parser.add_argument('--nprocs', type=int, default=0, help="verify this many forecast hours in parallel")
-    parser.add_argument('--optimizer', type=str, choices=['adam','sgd'], default='adam', help="optimizer")
-    parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
-    parser.add_argument('--splittime', type=lambda s: pd.to_datetime(s), default="202012021200", help="train with storms before this time; test this time and after")
-    parser.add_argument('--suite', type=str, default='default', choices=["default","with_storm_mode","with_cnn_storm_mode"], help="name for suite of training features")
-    parser.add_argument('--twin', type=int, default=2, help="time window in hours")
-    args = parser.parse_args()
-    return args
+def configs_match(ylargs, args):
+    if args.kfold > 1:
+        # once I started KFold. Training and testing cases are all before train_test_split_time with KFold.
+        pass
+    else:
+        assert ylargs.splittime == args.splittime, f"yaml train_test_split_time {ylargs.splittime} does not match value from this script {args.splittime}"
+    for key in ["batchnorm","batchsize","debug","dropout","epochs","flash","glm","kfold","layers","learning_rate","model","neurons","optimizer","reg_penalty","rptdist", "suite", "twin"]:
+        if key == "debug" and debug: continue # if running in debug mode, don't require debug in yaml file to match
+        assert getattr(ylargs,key) == getattr(args,key), f'this script {key} {getattr(args,key)} does not match yaml {key} {getattr(ylargs,key)}'
 
-args = parse_args()
+    return True
+
+parser = get_argparser()
+parser.add_argument('--nprocs', type=int, default=0, help="verify this many forecast hours in parallel")
+
+args = parser.parse_args()
+logging.info(args)
+
 # Assign arguments to simple-named variables
 clobber               = args.clobber
 debug                 = args.debug
 flash                 = args.flash
 glm                   = args.glm
+kfold                 = args.kfold
 model                 = args.model
 nfit                  = args.nfits
 nprocs                = args.nprocs
-optimizer             = args.optimizer
 rptdist               = args.rptdist
 savedmodel            = args.savedmodel
 train_test_split_time = args.splittime
@@ -74,27 +67,26 @@ if debug:
     logging.basicConfig(level=logging.DEBUG)
 
 
-logging.info(args)
-
-# Could be 'adam' or SGD from Sobash 2020
-optimizer = get_optimizer(optimizer)
-
 ### saved model name ###
-
-trained_models_dir = '/glade/work/ahijevyc/NSC_objects'
 if savedmodel:
     pass
 else:
     savedmodel = savedmodel_default(args, fhr_str='f01-f48') # use model trained on f01-f48 regardless of the hour you are testing
 logging.info(f"savedmodel={savedmodel}")
 
-for i in range(0,nfit):
-    savedmodel_i = f"nn/nn_{savedmodel}_{i}"
-    assert os.path.exists(savedmodel_i), f"{savedmodel_i} not found"
 
-nextfit = f"nn/nn_{savedmodel}_{i+1}"
-if os.path.exists(nextfit):
-    logging.warning(f"next fit exists ({nextfit}). Are you sure nfit only {nfit}?")
+if kfold:
+    logging.info(f"Do not apply train_test_split_time if KFold was used. KFold will do the splitting.")
+    train_test_split_time = pd.to_datetime("19010101")
+for ifold in range(kfold):
+    for i in range(0,nfit):
+        savedmodel_i = f"nn/nn_{savedmodel}_{i}/{kfold}fold{ifold}"
+        assert os.path.exists(savedmodel_i), f"{savedmodel_i} not found"
+
+    nextfit = f"nn/nn_{savedmodel}_{i+1}"
+    if os.path.exists(nextfit):
+        logging.warning(f"next fit exists ({nextfit}). Are you sure nfit only {nfit}?")
+
 
 odir = os.path.join("/glade/scratch", os.getenv("USER"))
 if glm: odir = os.path.join(odir, "GLM")
@@ -102,7 +94,11 @@ if not os.path.exists(odir):
     logging.info(f"making directory {odir}")
     os.mkdir(odir)
 
-ofile = os.path.realpath(f"nn/nn_{savedmodel}.scores.txt")
+ofile = os.path.realpath(f"nn/nn_{savedmodel}.{kfold}fold.scores.txt")
+if not clobber and os.path.exists(ofile):
+    logging.info(f"Exiting because output file {ofile} exists. Use --clobber option to override.")
+    sys.exit(0)
+
 logging.info(f"output file will be {ofile}")
 
 ##################################
@@ -110,8 +106,8 @@ logging.info(f"output file will be {ofile}")
 
 logging.info(f"Read {model} predictors")
 if model == "HRRR":
-    ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/sobash_test_Mar-Oct2021.par'
-    ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/sobash.noN7_Mar-Oct2021.par'
+    ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.noN7.par'
+    if debug: ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.noN7.fastdebug.par'
     scalingfile = "/glade/work/ahijevyc/NSC_objects/HRRR/scaling_values_all_HRRRX.pk"
     nfhr = 48
 elif model == "NSC3km-12sec":
@@ -124,27 +120,9 @@ if os.path.exists(ifile0):
     logging.info(f'reading {ifile0}')
     df = pd.read_parquet(ifile0, engine="pyarrow")
 else:
-    if model == "HRRR":
-        ifiles = glob.glob(f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_20210[3-9]??00-0000.par')
-        ifiles.extend(glob.glob(f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202110??00-0000.par'))
-    else:
-        logging.error(f"why is there no parquet file for {model}?")
-        logging.error(f"Do you need to run train_stormrpts_dnn.py to make {ifil0}?")
-        sys.exit(1)
-
-    if glm:
-        latest_valid_time = df.index.max()[0]
-        assert latest_valid_time > pd.to_datetime("20160101"), "DataFrame completely before GLM exists"
-        glmds = get_glm(twin, rptdist)
-        glmds = glmds.drop_vars(["lon","lat"]) # Don't interfere with HRRR lat and lon.
-        logging.info("Merge flashes with df")
-        #Do {model} and GLM overlap at all?"
-        df = df.merge(glmds.to_dataframe(), on=df.index.names)
-        assert not df.empty, f"Merged {model}/GLM Dataset is empty."
-
-    logging.info(f'writing parquet {ifile0}')
-    df.to_parquet(ifile0)
-    logging.info(f'wrote parquet {ifile0}')
+    logging.error(f"why is there no parquet file for {model}?")
+    logging.error(f"Do you need to run train_stormrpts_dnn.py to make {ifile0}?")
+    sys.exit(1)
 
 df, rptcols = rptdist2bool(df, rptdist, twin)
 
@@ -204,7 +182,7 @@ logging.info(f"keep {len(df)}/{before_filtering} cases with init times at or lat
 
 assert labels.sum().all() > 0, "at least 1 class has no True labels in testing set"
 
-logging.info(f"normalize with training cases mean and std in {scalingfile}.")
+logging.info(f"normalize with training cases mean and std in {scalingfile}")
 sv = pd.read_pickle(scalingfile) # conda activate tf if AttributeError: Can't get attribute 'new_block' on...
 if "fhr" in sv:
     logging.info("change fhr to forecast_hour in scaling DataFrame")
@@ -212,17 +190,18 @@ if "fhr" in sv:
 
 logging.info("Make sure no 7x7 neighborhood predictors are present")
 assert all("-N7" not in x for x in df.columns), "-N7 in df. expected them to be dropped already"
+logging.info("no 7x7")
 
-if "with_storm_mode" not in suite:
-    logging.info("making predictors don't include storm mode")
-    storm_mode_columns = [x for x in df.columns if "SS_" in x or "NN_" in x]
+storm_mode_columns = [x for x in df.columns if "SS_" in x or "NN_" in x]
+if "with_storm_mode" not in suite and len(storm_mode_columns) > 0:
+    logging.info(f"Dropping {len(storm_mode_columns)} storm mode columns.")
     df = df.drop(columns=storm_mode_columns)
 
 
 # You might have scaling factors for columns that you dropped already, like -N7 columns.
 extra_sv_columns = set(sv.columns) - set(df.columns)
 if extra_sv_columns:
-    logging.warning(f"dropping {len(extra_sv_columns)} extra scaling factor columns {extra_sv_columns}")
+    logging.info(f"dropping {len(extra_sv_columns)} extra scaling factor columns {extra_sv_columns}")
     sv = sv.drop(columns=extra_sv_columns)
 
 
@@ -231,67 +210,79 @@ def statjob(fhr,statcurves=False):
         fig = plt.figure(figsize=(10,7))
     # test model
     y_preds = pd.DataFrame()
-    this_fhr = df["forecast_hour"] == fhr # Just this fhr
+    if fhr == "all":
+        this_fhr = ~df["forecast_hour"].isna() # all finite forecast hours
+    else:
+        this_fhr = df["forecast_hour"] == fhr # Just this fhr
     df_fhr = df[this_fhr]
     labels_fhrs = labels[this_fhr]
     logging.debug(f"normalize {fhr}")
     df_fhr = (df_fhr - sv.loc["mean"]) / sv.loc["std"]
     stattxt = ""
+    cv = KFold(n_splits=kfold)
+
     for thisfit in range(nfit):
-        savedmodel_thisfit = f"nn/nn_{savedmodel}_{thisfit}"
-        logging.debug(f"reading {savedmodel_thisfit} column order")
-        yl = yaml.load(open(os.path.join(savedmodel_thisfit, "config.yaml"),"r"), Loader=yaml.Loader) # not "safe" (yaml.FullLoader is) but legacy Loader handles argparse.namespace object. 
-        yl_labels = yl["labels"]
-        del(yl["labels"]) # delete labels so we can make DataFrame from rest of dictionary.
-        assert yl["args"].splittime == train_test_split_time, f"yaml train_test_split_time {yl['args']['train_test_split_time']} does not match value from this script {train_test_split_time}"
-        del(yl["args"]) 
-        assert all(yl_labels == labels.columns), f"labels {label.columns} don't match when model was trained {yl_labels}"
-        yl = pd.DataFrame(yl).set_index("columns").T
-        if "fhr" in yl:
-            logging.info("change fhr to forecast_hour in yaml columns")
-            yl = yl.rename(columns={"fhr": "forecast_hour"})
-        if len(yl.columns) != len(df_fhr.columns):
-            print(f"length of yaml and df_fhr columns differ {yl.columns} {df_fhr.columns}")
-            pdb.set_trace()
-        assert np.isclose(yl.reindex(columns=sv.columns), sv.loc[yl.index]).all(), f"pickle and yaml scaling factors don't match up {sv} {yl}"
-        if not all(yl.columns == df_fhr.columns):
-            logging.info(f"reordering columns")
-            df_fhr = df_fhr.reindex(columns=yl.columns)
-        assert all(yl.columns == df_fhr.columns), f"columns {df.columns} don't match when model was trained {columns}"
-        logging.info(f"loading {savedmodel_thisfit}")
-        model = load_model(savedmodel_thisfit, custom_objects=dict(brier_skill_score=brier_skill_score))
-        logging.info(f"predicting...")
-        y_pred = model.predict(df_fhr.to_numpy(dtype='float32')) # Grab numpy array of predictions.
-        y_pred = pd.DataFrame(y_pred, columns=labels_fhrs.columns, index=df_fhr.index) # Convert prediction numpy array to DataFrame with index (row) and column labels.
-        y_pred = pd.concat([y_pred], keys=[thisfit], names=["fit"]) # make prediction DataFrame a multilevel DataFrame by prepending the index with another level called "fit"
-        y_preds = y_preds.append(y_pred) # append this fit to the y_preds DataFrame
-        for rpt_type in labels_fhrs.columns: # for each report type
-            y_pred = y_preds.xs(thisfit, level="fit")[rpt_type] # Grab this particular report type
-            labels_fhr = labels_fhrs[rpt_type]
-            assert labels_fhr.index.equals(y_pred.index), f'fit {thisfit} {rpt_type} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
-            bss = brier_skill_score(labels_fhr, y_pred)
-            base_rate = labels_fhr.mean()
-            auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
-            logging.info(f"{rpt_type} fit={thisfit} fhr={fhr} {bss} {base_rate} {auc}")
-            stattxt += f"{rpt_type},{thisfit},{fhr},{bss},{base_rate},{auc}\n"
-    # TODO: do I have to worry about overlapping valid_times from different init_times?
-    ensmean = y_preds.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate"]).mean() # average probability over nfits 
+        for ifold, (train_index, test_index) in enumerate(cv.split(df_fhr)):
+            df_fhr_fold = df_fhr.iloc[test_index]
+            labels_fhrs_fold = labels_fhrs.iloc[test_index]
+            savedmodel_thisfitfold = f"nn/nn_{savedmodel}_{thisfit}/{kfold}fold{ifold}"
+            logging.debug(f"reading {savedmodel_thisfitfold} column order")
+            yl = yaml.load(open(os.path.join(savedmodel_thisfitfold, "config.yaml"),"r"), Loader=yaml.Loader) # not safe (yaml.FullLoader is) but legacy Loader handles argparse.namespace object. 
+            yl_labels = yl["labels"]
+            del(yl["labels"]) # delete labels so we can make DataFrame from rest of dictionary.
+            assert configs_match(yl["args"], args), f'this configuration {args} does not match yaml file {yl["args"]}'
+            del(yl["args"]) 
+            assert all(yl_labels == labels.columns), f"labels {label.columns} don't match when model was trained {yl_labels}"
+            yl = pd.DataFrame(yl).set_index("columns").T
+            if "fhr" in yl:
+                logging.info("Rename fhr to forecast_hour in yaml columns")
+                yl = yl.rename(columns={"fhr": "forecast_hour"})
+            if len(yl.columns) != len(df_fhr_fold.columns):
+                print(f"length of yaml and df_fhr_fold columns differ {yl.columns} {df_fhr_fold.columns}")
+                pdb.set_trace()
+            assert np.isclose(yl.reindex(columns=sv.columns), sv.loc[yl.index]).all(), f"pickle and yaml scaling factors don't match up\n{sv}\n{yl}"
+            if not all(yl.columns == df_fhr_fold.columns):
+                logging.info(f"reordering columns")
+                df_fhr_fold = df_fhr_fold.reindex(columns=yl.columns)
+            assert all(yl.columns == df_fhr_fold.columns), f"columns {df.columns} don't match when model was trained {columns}"
+            logging.info(f"loading {savedmodel_thisfitfold}")
+            model = load_model(savedmodel_thisfitfold, custom_objects=dict(brier_skill_score=brier_skill_score))
+            logging.info(f"predicting fit {thisfit} fold{ifold}...")
+            Y = model.predict(df_fhr_fold.to_numpy(dtype='float32')) # Grab numpy array of predictions.
+            Y = pd.DataFrame(Y, columns=labels_fhrs_fold.columns, index=df_fhr_fold.index) # Convert prediction numpy array to DataFrame with index (row) and column labels.
+            for rpt_type in labels_fhrs_fold.columns: # for each report type
+                y_pred = Y[rpt_type] # grab this particular report type
+                labels_fhr = labels_fhrs_fold[rpt_type]
+                assert labels_fhr.index.equals(y_pred.index), f'fit {thisfit} fold{ifold} {rpt_type} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
+                bss = brier_skill_score(labels_fhr, y_pred)
+                base_rate = labels_fhr.mean()
+                auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
+                logging.info(f"{rpt_type} fit={thisfit} fold={ifold} fhr={fhr} {bss} {base_rate} {auc}")
+                stattxt += f"{rpt_type},{thisfit},{ifold},{fhr},{bss},{base_rate},{auc}\n"
+            Y = pd.concat([Y], keys=[thisfit], names=["fit"]) # prepend "fit" level to multilevel DataFrame
+            Y = pd.concat([Y], keys=[ifold], names=["fold"]) # prepend "fold" level
+            y_preds = y_preds.append(Y) # append this fit/fold to the y_preds DataFrame
+    # I may have overlapping valid_times from different init_times like fhr=1 from today and fhr=25 from previous day
+    ensmean = y_preds.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate"]).mean() # average probability over all nfits and initialization_times valid at valid_time 
     assert "fit" not in ensmean.index.names, "fit should not be a MultiIndex level of ensmean, the average probability over nfits."
-    # write predictions from each member and ensemble mean and the observed truth. (for debugging). 
-    ofile = os.path.join(odir, f"f{fhr:02d}.csv")
-    pd.concat([labels_fhrs.astype(int)], keys=["obs"], names=["fit"]).append(y_preds).to_csv(ofile)
-    thissavedmodel = savedmodel.replace('f01-f48', f'f{fhr:02d}') # for statistic curves plot file name
+    thissavedmodel = savedmodel.replace('f01-f48', f'f{fhr}') # for statistic curves plot file name
     logging.debug(f"getting bss, base rate, auc")
     for rpt_type in labels_fhrs.columns:
         y_pred = ensmean[rpt_type]
         labels_fhr = labels_fhrs[rpt_type]
-        labels_fhr = labels_fhr.reindex_like(y_pred) # valid_time is sorted in y_pred, not labels_fhr
+        # probability averaged over all nfits and initialization_times valid at valid_time, eliminating multiple values for multiple initialization times. Do same for labels_fhrs.
+        # First and last label should be same for a particular valid_time, y, and x coordinate.
+        first_label = labels_fhr.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate"]).first()
+        last_label  = labels_fhr.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate"]).last()
+        assert first_label.equals(last_label), f"discrepancies in first and last forecasts valid at same valid time {(first != last).sum()}" 
+        labels_fhr = first_label # just need one instance of the duplicate labels
         assert labels_fhr.index.equals(y_pred.index), f'{rpt_type} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
         bss = brier_skill_score(labels_fhr, y_pred)
         base_rate = labels_fhr.mean()
         auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
-        logging.info(f"{rpt_type} ensmean fhr={fhr} {bss} {base_rate} {auc}")
-        stattxt += f"{rpt_type},ensmean,{fhr},{bss},{base_rate},{auc}\n"
+        # TODO: add average_precision_score
+        logging.info(f"{rpt_type} ensmean fold=all fhr={fhr} {bss} {base_rate} {auc}")
+        stattxt += f"{rpt_type},ensmean,all,{fhr},{bss},{base_rate},{auc}\n"
         if statcurves:
             logging.info(f"{rpt_type} reliability diagram, histogram, & ROC curve")
             ax1 = plt.subplot2grid((3,2), (0,0), rowspan=2)
@@ -309,11 +300,13 @@ def statjob(fhr,statcurves=False):
     return stattxt
 
 if debug:
-    statjob(24, statcurves=True)
+    statjob('all', statcurves=True)
     sys.exit(0)
 
 fhrs = range(1,nfhr+1)
 fhrs = df.forecast_hour.unique() # allow for datasets, like storm mode probabilities, that don't start at fhr=1
+fhrs = list(fhrs)
+fhrs.insert(0,"all") # put "all" first because it takes the longest
 if nprocs:
     # Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
     # execcasper --ncpus=13 --mem=50GB # gpus not neeeded for verification
@@ -328,7 +321,7 @@ else:
 
 
 with open(ofile, "w") as fh:
-    fh.write('class,mem,fhr,bss,base rate,auc\n')
+    fh.write('class,mem,fold,fhr,bss,base rate,auc\n')
     fh.write(''.join(data))
 
 logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")
