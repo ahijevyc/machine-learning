@@ -5,25 +5,29 @@ import glob
 from hwtmode.data import decompose_circular_feature
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, rptdist2bool, get_glm, get_optimizer, savedmodel_default
+from ml_functions import brier_skill_score, get_argparser, get_glm, get_optimizer, rptdist2bool, savedmodel_default
 import numpy as np
 import os
 import pandas as pd
 import pdb
 import pickle
 import random
-from sklearn.model_selection import train_test_split
-import tensorflow.keras.backend 
+import re
+import sys
+from sklearn.model_selection import KFold, GroupKFold, train_test_split
+from sklearn.preprocessing import LabelEncoder
+#import tensorflow.keras.backend # maybe delete? 
 from tensorflow.keras.layers import Dense, Dropout, BatchNormalization
 from tensorflow.keras.metrics import MeanSquaredError, AUC
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.regularizers import L2
-import sys
 import time
+import visualizecv # custom script by ahijevyc modified from sklearn web page
 import xarray
 import yaml
 
-def baseline_model(input_dim=None, name=None,numclasses=None, neurons=16, layer=2, kernel_regularizer=None, optimizer='adam', dropout=0, batch_normalize=False):
+def baseline_model(input_dim=None, name=None,numclasses=None, neurons=16, layer=2, kernel_regularizer=None, 
+        optimizer='adam', dropout=0, batch_normalize=False, learningrate=0.01):
 
     # Discard any pre-existing version of the model.
     model = Sequential(name=name)
@@ -33,7 +37,6 @@ def baseline_model(input_dim=None, name=None,numclasses=None, neurons=16, layer=
         if batch_normalize:
             model.add(BatchNormalization())
         model.add(Dense(neurons, activation='relu', kernel_regularizer=kernel_regularizer))
-    #model.add(Dropout(rate=dropout)) # not in Ryan's  
     model.add(Dense(numclasses, activation='sigmoid')) # used softmax in HWT_mode to add to 1
 
     # Compile model with optimizer and loss function. MSE is same as brier_score.
@@ -43,6 +46,17 @@ def baseline_model(input_dim=None, name=None,numclasses=None, neurons=16, layer=
     return model
 
 
+def modedate(ifiles, target_dates):
+    target_dates = pd.to_datetime(target_dates)
+    start, end = target_dates.min(), target_dates.max()
+    pattern = r'/20\d\d[01][0-9][0123][0-9][012][0-9][0-5][0-9]/'
+    filtered_ifiles = []
+    for ifile in ifiles:
+        yyyymmddhhmm = re.search(pattern, ifile).group().lstrip("/").rstrip("/")
+        itime = pd.to_datetime(yyyymmddhhmm, format='%Y%m%d%H%M')
+        if itime >= start and itime <= end:
+            filtered_ifiles.append(ifile)
+    return filtered_ifiles
 
 
 
@@ -84,47 +98,32 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 def main():
     import pandas as pd # started getting UnboundLocalError: local variable 'pd' referenced before assignment Mar 1 2022 even though I import pandas above
 
-    # =============Arguments===================
-    parser = argparse.ArgumentParser(description = "train neural network",
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--batchnorm',  action='store_true', help="turn on batch normalization")
-    parser.add_argument('--batchsize', type=int, default=512, help="nn training batch size") # tf default is 32
-    parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")
-    parser.add_argument("-d", "--debug", action='store_true')
-    parser.add_argument("--dropout", type=float, default=0, help='fraction of neurons to drop in each hidden layer (0-1)')
+    parser = get_argparser()
     parser.add_argument('--fhr', nargs="+", type=int, default=list(range(1,49)), help="forecast hour")
     parser.add_argument('--fits', nargs="+", type=int, default=None, help="work on specific fit(s) so you can run many in parallel")
-    parser.add_argument('--nfits', type=int, default=10, help="number of times to fit (train) model")
-    parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
-    parser.add_argument('--flash', type=int, default=10, help="GLM flash count threshold")
-    parser.add_argument('--layer', default=2, type=int, help="number of hidden layers")
-    parser.add_argument('--L2', action='store_true', help='apply kernel regularizer to hidden layers') 
-    parser.add_argument('--model', type=str, choices=["HRRR","NSC3km-12sec"], default="HRRR", help="prediction model")
-    parser.add_argument("--glm", action='store_true', help='Use GLM')
-    parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
-    parser.add_argument('--optimizer', type=str, choices=['adam','sgd'], default='adam', help="optimizer")
-    parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
-    parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
+    parser.add_argument('--folds', nargs="+", type=int, default=None, help="work on specific fold(s) so you can run many in parallel")
     parser.add_argument('--seed', type=int, default=None, help="random number seed for reproducability")
-    parser.add_argument('--splittime', type=lambda s: pd.to_datetime(s), default="202012021200", help="train with storms before this time; test this time and after")
-    parser.add_argument('--suite', type=str, default='default', choices=["default","with_storm_mode","with_cnn_storm_mode"], help="name for suite of training features")
-    parser.add_argument('--twin', type=int, default=2, help="time window in hours")
+
+    args = parser.parse_args()
+    logging.info(args)
 
     # Assign arguments to simple-named variables
-    args = parser.parse_args()
     batchnorm             = args.batchnorm 
     batchsize             = args.batchsize
     clobber               = args.clobber
     debug                 = args.debug
-    dropout              = args.dropout
+    dropout               = args.dropout
     epochs                = args.epochs
     flash                 = args.flash
     fhr                   = args.fhr
     fits                  = args.fits
+    folds                 = args.folds
     nfit                  = args.nfits
     glm                   = args.glm
-    layer                 = args.layer
-    applyL2               = args.L2
+    kfold                 = args.kfold
+    layer                 = args.layers
+    learning_rate         = args.learning_rate
+    reg_penalty           = args.reg_penalty
     model                 = args.model
     neurons               = args.neurons
     optimizer             = args.optimizer
@@ -135,7 +134,9 @@ def main():
     suite                 = args.suite
     twin                  = args.twin
 
-    logging.debug(args)
+
+    if debug:
+        logging.basicConfig(level=logging.DEBUG)
 
     if seed:
         logging.info(f"random seed {seed}")
@@ -144,11 +145,9 @@ def main():
         tf.random.set_seed(seed)
 
     # Could be 'adam' or SGD from Sobash 2020
-    optimizer = get_optimizer(optimizer)
+    optimizer = get_optimizer(optimizer, learning_rate=learning_rate)
 
     ### saved model name ###
-
-    trained_models_dir = '/glade/work/ahijevyc/NSC_objects'
     if savedmodel:
         pass
     else:
@@ -175,6 +174,7 @@ def main():
         alsoHRRRv4 = False
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.par'
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.noN7.par'
+        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.noN7.fastdebug.par'
         if alsoHRRRv4: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.noN7.par'
         scalingfile = f"/glade/work/ahijevyc/NSC_objects/{model}/scaling_values_all_HRRRX.pk"
     elif model == "NSC3km-12sec":
@@ -188,6 +188,8 @@ def main():
         # Define ifiles, a list of input files from glob.glob method
         if model == "HRRR":
             search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRRX_d01_20*00-0000.par' # just 00z 
+            if debug:
+                search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRRX_d01_2020060*00-0000.par' # just 00z 
             ifiles = glob.glob(search_str)
             if alsoHRRRv4:
                 search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202[01]*00-0000.par' # HRRR, not HRRRX. no 2022 (yet) 
@@ -205,35 +207,40 @@ def main():
 
         # Read list of columns columns2read (includes severe reports)
         logging.info(f"Reading {len(ifiles)} {model} files {search_str}")
-        df = pd.concat( pd.read_parquet(ifile, engine="pyarrow", columns=columns2read) for ifile in ifiles)
+        df = pd.concat( pd.read_parquet(ifile, engine="pyarrow", columns=columns2read) for ifile in ifiles) # pd.read_parquet only handles one file at a time, so pd.concat
         logging.info("done")
-
-        # Read mode probabilities
-        search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation_zero_filled/20*/label_probabilities_20*00_fh_*.nc'
-        ifiles = sorted(glob.glob(search_str))
-        logging.info(f"Read {len(ifiles)} storm mode files")
-        modeds = xarray.open_mfdataset( ifiles, preprocess=lambda x: x.set_index(time=['init_time','forecast_hour']) )
-        logging.info(f"Unstack time dimension")
-        modeds = modeds.unstack('time')
-        logging.info(f"Make x and y indices actual coordinates, so we don't lose track when we mask and drop")
-        modeds = modeds.assign_coords(dict(x=modeds.x,y=modeds.y))
-        logging.info(f"Use CONUS mask and drop points outside CONUS")
-        modeds = modeds.where(mask, drop=True)
-        logging.info(f"reset xarray Dataset coordinates [lon, lat] to variables")
-        modeds = modeds.reset_coords(["lon","lat"]) 
-
-        # In modeds, x : west to east, y : south to north
-        # In sobash df, xind : south to north, yind : west to east.
-        modeds = modeds.rename(dict(x="y",y="x",init_time="initialization_time")) #dimensions are renamed to match df.
 
         # Index df and modeds the same way. 
         logging.info(f"convert df Date to datetime64[ns]")
         df["Date"] = df.Date.astype('datetime64[ns]')
         df = df.rename(columns=dict(yind="y",xind="x",Date="initialization_time",fhr="forecast_hour"))
+        df["valid_time"] = pd.to_datetime(df["initialization_time"]) + df["forecast_hour"].astype(int) * datetime.timedelta(hours=1)
         df = df.set_index(["y","x","initialization_time","forecast_hour"])
-        logging.info(f"merge {model} DataFramef with mode Dataset in xarray")
-        ds = df.to_xarray().merge(modeds, join="inner", compat="override") # if you don't use join="inner" you get a lot of NaNs. override to ignore lat/lon mismatch (TODO: why mismatch?)
-        df = ds.to_dataframe().dropna(axis="index") # for some reason there are still nans even after using join="inner" above.
+
+        if model.startswith("NSC3km"):
+            # Read mode probabilities
+            search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation_zero_filled/20*/label_probabilities_20*00_fh_*.nc'
+            ifiles = sorted(glob.glob(search_str))
+            logging.info(f"Found {len(ifiles)} storm mode files")
+            ifiles = modedate(ifiles, df.initialization_time)
+            logging.info(f"Read {len(ifiles)} storm mode files in date range of {model} DataFrame")
+            modeds = xarray.open_mfdataset( ifiles, preprocess=lambda x: x.set_index(time=['init_time','forecast_hour']) )
+            logging.info(f"Unstack time dimension")
+            modeds = modeds.unstack('time')
+            logging.info(f"Make x and y indices actual coordinates, so we don't lose track when we mask and drop")
+            modeds = modeds.assign_coords(dict(x=modeds.x,y=modeds.y))
+            logging.info(f"Use CONUS mask and drop points outside CONUS")
+            modeds = modeds.where(mask, drop=True)
+            logging.info(f"reset xarray Dataset coordinates [lon, lat] to variables")
+            modeds = modeds.reset_coords(["lon","lat"]) 
+
+            # In modeds, x : west to east, y : south to north
+            # In sobash df, xind : south to north, yind : west to east.
+            modeds = modeds.rename(dict(x="y",y="x",init_time="initialization_time")) #dimensions are renamed to match df.
+
+            logging.info(f"merge {model} DataFrame with mode Dataset in xarray")
+            ds = df.to_xarray().merge(modeds, join="inner", compat="override") # if you don't use join="inner" you get a lot of NaNs. override to ignore lat/lon mismatch (TODO: why mismatch?)
+            df = ds.to_dataframe().dropna(axis="index") # for some reason there are still nans even after using join="inner" above.
 
         # Derived fields
         df["dayofyear"] = df["valid_time"].dt.dayofyear
@@ -245,43 +252,48 @@ def main():
         dtype_dict.update({k:np.int32   for k in df.select_dtypes(np.int64).columns})
         df = df.astype(dtype_dict, copy=False)
         df = df.reset_index().set_index(["valid_time","y","x"])
-        logging.info(f"writing {ifile}")
-        df.to_parquet(ifile)
 
-    if glm:
-        latest_valid_time = df.index.max()[0]
+        earliest_valid_time = df.index.get_level_values(level="valid_time").min()
+        latest_valid_time = df.index.get_level_values(level="valid_time").max()
         assert latest_valid_time > pd.to_datetime("20160101"), "DataFrame completely before GLM exists"
         glmds = get_glm(twin, rptdist)
-        logging.info("Merge flashes with df")
+        glmds = glmds.sel(valid_time = slice(earliest_valid_time,latest_valid_time)) # Trim GLM to time window of model data
+        logging.info(f"Merge flashes with {model} DataFrame")
+        # In glmds, x : west to east, y : south to north
+        # In sobash df, xind : south to north, yind : west to east.
+        glmds = glmds.rename(dict(x="y",y="x")) #dimensions are renamed to match sobash df.
+        df = df.merge(glmds.to_dataframe(), left_on=["valid_time","y","x"], right_on=["valid_time","y","x"])
         #Do {model} and GLM overlap at all?"
-        df = df.merge(glmds.to_dataframe(), on=df.index.names)
         assert not df.empty, f"Merged {model}/GLM Dataset is empty."
-    
-
-    # Convert distance to closest storm report to True/False based on distance and time thresholds 
-    df, rptcols = rptdist2bool(df, rptdist, twin)
-
-    plotclimo=False
-    if plotclimo:
-        mdf = df.groupby(["lon_x","lat_x"]).sum() # for debug plot
-        fig, axes = plt.subplots(nrows=3,ncols=2)
-        for label,ax in zip(rptcols, axes.flatten()):
-            im = ax.scatter(mdf.index.get_level_values("lon_x"), mdf.index.get_level_values("lat_x"), c=mdf[label]) # Don't use mdf (sum) for lon/lat
-            ax.set_title(label)
-            fig.colorbar(im, ax=ax)
-        plt.show()
-
-    # speed things up without multiindex
-    df = df.reset_index(drop=True)
-
-    if glm:
         # Sanity check--make sure prediction model and GLM grid box lat lons are similar
         assert (df.lon_y - df.lon_x).max() < 0.1, f"{model} and glm longitudes don't match"
         assert (df.lat_y - df.lat_x).max() < 0.1, f"{model} and glm lats don't match"
         df = df.drop(columns=["lon_y","lat_y"])
         df = df.rename(columns=dict(lon_x="lon",lat_x="lat")) # helpful for scale factor pickle file.
+    
+        logging.info(f"writing {ifile}")
+        df.to_parquet(ifile)
+
+    # Convert distance to closest storm report to True/False based on distance and time thresholds 
+    df, rptcols = rptdist2bool(df, rptdist, twin)
+
+    if glm:
         df["flashes"] = df["flashes"] >= flash
         rptcols.append("flashes")
+
+
+    plotclimo=False
+    if plotclimo:
+        mdf = df.groupby(["lon","lat"]).sum() # for debug plot
+        fig, axes = plt.subplots(nrows=3,ncols=2)
+        for label,ax in zip(rptcols, axes.flatten()):
+            im = ax.scatter(mdf.index.get_level_values("lon"), mdf.index.get_level_values("lat"), c=mdf[label]) # Don't use mdf (sum) for lon/lat
+            ax.set_title(label)
+            fig.colorbar(im, ax=ax)
+        plt.show()
+
+    logging.info(f"Sort by valid_time and speed things up by dropping multiindex")
+    df = df.sort_index(level="valid_time", ignore_index=True)
 
 
 
@@ -313,25 +325,26 @@ def main():
     df.info()
     print(labels.sum())
 
+
+
+
     # Split into training and testing cases
+
     # HRRRv3 to v4 at 20201202 0z.
-    if train_test_split_time:
-        idate = df.initialization_time.astype('datetime64[ns]')
-        df = df.drop(columns="initialization_time")
-        logging.info(f"train test split time {train_test_split_time}")
-        test_idx  = (idate >= train_test_split_time) & (idate < pd.to_datetime("20211031")) # Mar 1 - Oct 31 2021 # changed > to >= on Jun 28, 2022
-        train_idx = ~test_idx
-        df_train = df[train_idx]
-        df_test  = df[test_idx]
-        train_labels = labels[train_idx]
-        test_labels  = labels[test_idx]
-    else:
-        df_train, df_test, train_labels, test_labels = train_test_split(df, labels, test_size=0.1, shuffle=False)
+    idate = df.initialization_time.astype('datetime64[ns]') # used for train_test_split_time 
+    df = df.drop(columns="initialization_time")
+    logging.info(f"train test split time {train_test_split_time}")
+    test_idx  = (idate >= train_test_split_time) & (idate < pd.to_datetime("20211031")) # Mar 1 - Oct 31 2021 # changed > to >= on Jun 28, 2022
+    train_idx = ~test_idx
+    df_train = df[train_idx]
+    df_test  = df[test_idx]
+    train_labels = labels[train_idx]
+    test_labels  = labels[test_idx]
 
     assert all(train_labels.sum()) > 0, "some classes have no True labels in training set"
 
 
-    logging.info("normalize data")
+    logging.info("normalize data using training set")
     if os.path.exists(scalingfile):
         logging.info(f"using pickle file {scalingfile}")
         sv = pickle.load(open(scalingfile, "rb")).astype(np.float32)
@@ -358,30 +371,47 @@ def main():
 
     if df_train.describe().isna().any().any():
         logging.error(f"nan(s) in {df_train.columns[df_train.mean().isna()]}")
-    # train model
-    if not fits: # if user did not ask for specific fits, assume fits range from 0 to nfit-1.
-        fits = range(0,nfit)
-    for i in fits:
-        model_i = f"nn/nn_{savedmodel}_{i}"
-        if not clobber and os.path.exists(model_i):
-            logging.info(f"{model_i} exists")
-        else:
-            logging.info(f"fitting {model_i}")
-            model = baseline_model(input_dim=df_train.columns.size,numclasses=train_labels.columns.size, neurons=neurons[0], layer=layer, name=f"fit_{i}",
-                    kernel_regularizer=L2() if applyL2 else None, optimizer=optimizer, dropout=dropout)
-            history = model.fit(df_train.to_numpy(dtype='float32'), train_labels.to_numpy(dtype='float32'), class_weight=None, sample_weight=None, batch_size=batchsize,
-                epochs=epochs, validation_data=(df_test.to_numpy(dtype='float32'), test_labels.to_numpy(dtype='float32')), verbose=2)
-            logging.debug(f"saving {model_i}")
-            model.save(model_i)
-            # Save order of columns, scaling factors, all arguments.
-            with open(os.path.join(model_i, "config.yaml"), "w") as yfile:
-                yaml.dump(
-                        dict(columns=df_train.columns.to_list(),
-                            mean=sv.loc["mean"].reindex(df_train.columns).to_list(),
-                            std=sv.loc["std"].reindex(df_train.columns).to_list(),
-                            labels=train_labels.columns.to_list(),
-                            args=args,
-                            ), yfile)
+
+    cv = KFold(n_splits=kfold) 
+
+    plot_splits= False
+    if plot_splits:
+        fig, ax = plt.subplots()
+        y = train_labels["any_rptdist_2hr"]
+        n_splits = kfold
+        visualizecv.plot_cv_indices(cv, df_train, y, None, ax, n_splits)
+        plt.show()
+
+
+    for ifold, (train_split, test_split) in enumerate(cv.split(df_train, train_labels)): # train_labels has no effect for KFold, but for GroupKFold, it, along with groups argument would affect folds.
+        if folds and ifold not in folds: continue # just do specific folds (needed for OOM issue in 1024-neuron GPU cases)
+
+        # train model
+        if not fits: # if user did not ask for specific fits, assume fits range from 0 to nfit-1.
+            fits = range(0,nfit)
+        for i in fits:
+            model_i = f"nn/nn_{savedmodel}_{i}/{kfold}fold{ifold}"
+            if not clobber and os.path.exists(model_i) and os.path.exists(f"{model_i}/config.yaml"):
+                logging.info(f"{model_i} exists")
+            else:
+                logging.info(f"fitting {model_i}")
+                model = baseline_model(input_dim=df_train.columns.size, numclasses=train_labels.columns.size, neurons=neurons[0], layer=layer, name=f"fit_{i}",
+                        kernel_regularizer=L2(l2=reg_penalty), optimizer=optimizer, dropout=dropout)
+                history = model.fit(df_train.iloc[train_split].to_numpy(dtype='float32'), train_labels.iloc[train_split].to_numpy(dtype='float32'), class_weight=None, 
+                        sample_weight=None, batch_size=batchsize, epochs=epochs, verbose=2)
+                logging.debug(f"saving {model_i}")
+                model.save(model_i)
+                del(history)
+                del(model)
+                # Save order of columns, scaling factors, all arguments.
+                with open(os.path.join(model_i, "config.yaml"), "w") as yfile:
+                    yaml.dump(
+                            dict(columns=df_train.columns.to_list(),
+                                mean=sv.loc["mean"].reindex(df_train.columns).to_list(),
+                                std=sv.loc["std"].reindex(df_train.columns).to_list(),
+                                labels=train_labels.columns.to_list(),
+                                args=args,
+                                ), yfile)
 
 
 if __name__ == "__main__":
