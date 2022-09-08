@@ -148,21 +148,28 @@ else:
         logging.error("unexpected x and y coordinates. check mask, training script, parquet file...")
         sys.exit(1)
 
+
+assert set(df.index.names) == set(['valid_time', 'projection_x_coordinate', 'projection_y_coordinate']), f"unexpected index names for df {df.index.names}"
+
 # This script expects "forecast_hour" spelled out.
 df = df.rename(columns={"fhr": "forecast_hour", "init_time": "initialization_time"})
+
+validtimes = df.index.get_level_values(level="valid_time")
+logging.info(f"range of valid times: {validtimes.min()} - {validtimes.max()}")
+
+
+# This is done in train_stormrpts_dnn.py. Important to do here too.
+logging.info(f"Sort by valid_time")
+df = df.sort_index(level="valid_time") # Can't ignore_index=True like train_stormrpts_dnn.py cause we need multiindex, but it shouldn't affect order
+
 
 if "HAILCAST_DIAM_MAX" in df and (df["HAILCAST_DIAM_MAX"] == 0).all():
     logging.info("HAILCAST_DIAM_MAX all zeros. Dropping.")
     df = df.drop(columns="HAILCAST_DIAM_MAX")
 
-
-assert set(df.index.names) == set(['valid_time', 'projection_x_coordinate', 'projection_y_coordinate']), f"unexpected index names for df {df.index.names}"
-
 labels = df[rptcols] # converted to Boolean above
 df = df.drop(columns=rptcols)
 
-validtimes = df.index.get_level_values(level="valid_time")
-logging.info(f"range of valid times: {validtimes.min()} - {validtimes.max()}")
 df.info()
 print(labels.sum())
 
@@ -174,6 +181,10 @@ if "initialization_time" in df:
 else:
     logging.info("derive initialization times")
     idate = df.index.get_level_values(level="valid_time") - df["forecast_hour"] * datetime.timedelta(hours=1) 
+
+
+
+
 test_idx = idate >= train_test_split_time
 before_filtering  = len(df)
 df = df[test_idx]
@@ -205,60 +216,71 @@ if extra_sv_columns:
     sv = sv.drop(columns=extra_sv_columns)
 
 
-def statjob(fhr,statcurves=False):
+cv = KFold(n_splits=kfold)
+
+def statjob(fhr,statcurves=None):
+    if statcurves is None:
+        statcurves = fhr == "all"
     if statcurves:
         fig = plt.figure(figsize=(10,7))
-    # test model
-    y_preds = pd.DataFrame()
+    # this_fhr for all cases, not just one fold
     if fhr == "all":
         this_fhr = ~df["forecast_hour"].isna() # all finite forecast hours
     else:
         this_fhr = df["forecast_hour"] == fhr # Just this fhr
-    df_fhr = df[this_fhr]
-    labels_fhrs = labels[this_fhr]
-    logging.debug(f"normalize {fhr}")
-    df_fhr = (df_fhr - sv.loc["mean"]) / sv.loc["std"]
+    # test model
+    y_preds = pd.DataFrame()
     stattxt = ""
-    cv = KFold(n_splits=kfold)
+    for ifold, (train_index, test_index) in enumerate(cv.split(df)):
+        df_fold = df.iloc[test_index]
+        labels_fold = labels.iloc[test_index]
+        if fhr == "all":
+            this_fold_fhr = ~df_fold["forecast_hour"].isna() # all finite forecast hours
+        else:
+            this_fold_fhr = df_fold["forecast_hour"] == fhr # Just this fhr
+        df_fold_fhr = df_fold[this_fold_fhr]
+        labels_fold_fhr = labels_fold[this_fold_fhr]
 
-    for thisfit in range(nfit):
-        for ifold, (train_index, test_index) in enumerate(cv.split(df_fhr)):
-            df_fhr_fold = df_fhr.iloc[test_index]
-            labels_fhrs_fold = labels_fhrs.iloc[test_index]
+        # Tried normalizing the whole DataFrame df before this function, but you don't want to normalize fhr first. You need them as integers.
+        logging.debug(f"normalize fhr={fhr}")
+        df_fold_fhr = (df_fold_fhr - sv.loc["mean"]) / sv.loc["std"]
+
+        for thisfit in range(nfit):
             savedmodel_thisfitfold = f"nn/nn_{savedmodel}_{thisfit}/{kfold}fold{ifold}"
-            logging.debug(f"reading {savedmodel_thisfitfold} column order")
+            logging.info(f"checking {savedmodel_thisfitfold} column order")
             yl = yaml.load(open(os.path.join(savedmodel_thisfitfold, "config.yaml"),"r"), Loader=yaml.Loader) # not safe (yaml.FullLoader is) but legacy Loader handles argparse.namespace object. 
             yl_labels = yl["labels"]
             del(yl["labels"]) # delete labels so we can make DataFrame from rest of dictionary.
             assert configs_match(yl["args"], args), f'this configuration {args} does not match yaml file {yl["args"]}'
             del(yl["args"]) 
-            assert all(yl_labels == labels.columns), f"labels {label.columns} don't match when model was trained {yl_labels}"
+            assert all(yl_labels == labels_fold_fhr.columns), f"labels {label_fold_fhr.columns} don't match when model was trained {yl_labels}"
             yl = pd.DataFrame(yl).set_index("columns").T
             if "fhr" in yl:
                 logging.info("Rename fhr to forecast_hour in yaml columns")
                 yl = yl.rename(columns={"fhr": "forecast_hour"})
-            if len(yl.columns) != len(df_fhr_fold.columns):
-                print(f"length of yaml and df_fhr_fold columns differ {yl.columns} {df_fhr_fold.columns}")
+            if len(yl.columns) != len(df_fold_fhr.columns):
+                print(f"length of yaml and df_fold_fhr columns differ {yl.columns} {df_fold_fhr.columns}")
                 pdb.set_trace()
             assert np.isclose(yl.reindex(columns=sv.columns), sv.loc[yl.index]).all(), f"pickle and yaml scaling factors don't match up\n{sv}\n{yl}"
-            if not all(yl.columns == df_fhr_fold.columns):
+            if not all(yl.columns == df_fold_fhr.columns):
                 logging.info(f"reordering columns")
-                df_fhr_fold = df_fhr_fold.reindex(columns=yl.columns)
-            assert all(yl.columns == df_fhr_fold.columns), f"columns {df.columns} don't match when model was trained {columns}"
+                df_fold_fhr = df_fold_fhr.reindex(columns=yl.columns)
+            assert all(yl.columns == df_fold_fhr.columns), f"columns {df.columns} don't match when model was trained {columns}"
             logging.info(f"loading {savedmodel_thisfitfold}")
             model = load_model(savedmodel_thisfitfold, custom_objects=dict(brier_skill_score=brier_skill_score))
-            logging.info(f"predicting fit {thisfit} fold{ifold}...")
-            Y = model.predict(df_fhr_fold.to_numpy(dtype='float32')) # Grab numpy array of predictions.
-            Y = pd.DataFrame(Y, columns=labels_fhrs_fold.columns, index=df_fhr_fold.index) # Convert prediction numpy array to DataFrame with index (row) and column labels.
-            for rpt_type in labels_fhrs_fold.columns: # for each report type
+            logging.info(f"predicting fhr {fhr}  fit {thisfit}  fold{ifold}...")
+            Y = model.predict(df_fold_fhr.to_numpy(dtype='float32')) # Grab numpy array of predictions.
+            Y = pd.DataFrame(Y, columns=labels_fold_fhr.columns, index=df_fold_fhr.index) # Put prediction numpy array into DataFrame with index (row) and column labels.
+            for rpt_type in labels_fold_fhr.columns: # for each report type
                 y_pred = Y[rpt_type] # grab this particular report type
-                labels_fhr = labels_fhrs_fold[rpt_type]
+                labels_fhr = labels_fold_fhr[rpt_type]
                 assert labels_fhr.index.equals(y_pred.index), f'fit {thisfit} fold{ifold} {rpt_type} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
                 bss = brier_skill_score(labels_fhr, y_pred)
                 base_rate = labels_fhr.mean()
                 auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
-                logging.info(f"{rpt_type} fit={thisfit} fold={ifold} fhr={fhr} {bss} {base_rate} {auc}")
-                stattxt += f"{rpt_type},{thisfit},{ifold},{fhr},{bss},{base_rate},{auc}\n"
+                aps = sklearn.metrics.average_precision_score(labels_fhr, y_pred)
+                logging.info(f"{rpt_type} fit={thisfit} fold={ifold} fhr={fhr} {bss} {base_rate} {auc} {aps}")
+                stattxt += f"{rpt_type},{thisfit},{ifold},{fhr},{bss},{base_rate},{auc},{aps}\n"
             Y = pd.concat([Y], keys=[thisfit], names=["fit"]) # prepend "fit" level to multilevel DataFrame
             Y = pd.concat([Y], keys=[ifold], names=["fold"]) # prepend "fold" level
             y_preds = y_preds.append(Y) # append this fit/fold to the y_preds DataFrame
@@ -266,10 +288,10 @@ def statjob(fhr,statcurves=False):
     ensmean = y_preds.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate"]).mean() # average probability over all nfits and initialization_times valid at valid_time 
     assert "fit" not in ensmean.index.names, "fit should not be a MultiIndex level of ensmean, the average probability over nfits."
     thissavedmodel = savedmodel.replace('f01-f48', f'f{fhr}') # for statistic curves plot file name
-    logging.debug(f"getting bss, base rate, auc")
-    for rpt_type in labels_fhrs.columns:
+    logging.debug(f"getting ensmean bss, base rate, auc, aps")
+    for rpt_type in labels.columns:
         y_pred = ensmean[rpt_type]
-        labels_fhr = labels_fhrs[rpt_type]
+        labels_fhr = labels.loc[this_fhr,rpt_type]
         # probability averaged over all nfits and initialization_times valid at valid_time, eliminating multiple values for multiple initialization times. Do same for labels_fhrs.
         # First and last label should be same for a particular valid_time, y, and x coordinate.
         first_label = labels_fhr.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate"]).first()
@@ -280,9 +302,10 @@ def statjob(fhr,statcurves=False):
         bss = brier_skill_score(labels_fhr, y_pred)
         base_rate = labels_fhr.mean()
         auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
-        # TODO: add average_precision_score
-        logging.info(f"{rpt_type} ensmean fold=all fhr={fhr} {bss} {base_rate} {auc}")
-        stattxt += f"{rpt_type},ensmean,all,{fhr},{bss},{base_rate},{auc}\n"
+        # average_precision_score
+        aps = sklearn.metrics.average_precision_score(labels_fhr, y_pred)
+        logging.info(f"{rpt_type} ensmean fold=all fhr={fhr} {bss} {base_rate} {auc} {aps}")
+        stattxt += f"{rpt_type},ensmean,all,{fhr},{bss},{base_rate},{auc},{aps}\n"
         if statcurves:
             logging.info(f"{rpt_type} reliability diagram, histogram, & ROC curve")
             ax1 = plt.subplot2grid((3,2), (0,0), rowspan=2)
@@ -300,7 +323,8 @@ def statjob(fhr,statcurves=False):
     return stattxt
 
 if debug:
-    statjob('all', statcurves=True)
+    stattxt = statjob(2, statcurves=True)
+    pdb.set_trace()
     sys.exit(0)
 
 fhrs = range(1,nfhr+1)
@@ -321,7 +345,7 @@ else:
 
 
 with open(ofile, "w") as fh:
-    fh.write('class,mem,fold,fhr,bss,base rate,auc\n')
+    fh.write('class,mem,fold,fhr,bss,base rate,auc,aps\n')
     fh.write(''.join(data))
 
 logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")
