@@ -42,7 +42,7 @@ def get_argparser():
     parser.add_argument('--batchsize', type=int, default=1024, help="nn training batch size") # tf default is 32
     parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")
     parser.add_argument("-d", "--debug", action='store_true')
-    parser.add_argument("--dropout", type=float, default=0, help='fraction of neurons to drop in each hidden layer (0-1)')
+    parser.add_argument("--dropout", type=float, default=0., help='fraction of neurons to drop in each hidden layer (0-1)')
     parser.add_argument('--nfits', type=int, default=5, help="number of times to fit (train) model")
     parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
     parser.add_argument('--flash', type=int, default=10, help="GLM flash count threshold")
@@ -75,7 +75,7 @@ def get_optimizer(s, learning_rate = 0.001, **kwargs):
 
 
 def rptdist2bool(df, rptdist, twin):
-    # get rid of columns that are not associated with the time window (twin)
+    # get rid of columns that are associated with different time window (twin)
     dropcol=[]
     for r in ["sighail", "sigwind", "hailone", "wind", "torn"]:
         for h in [0,1,2]:
