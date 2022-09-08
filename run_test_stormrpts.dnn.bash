@@ -2,6 +2,11 @@
 
 cmdfile=cmds.txt
 
+if [ $# -eq 1 ] ; then
+    cmdfile=$1
+fi
+
+
 i=0
 
 # Loop through commands file one line at a time
