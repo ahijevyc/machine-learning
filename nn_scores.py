@@ -27,6 +27,7 @@ def parse_args():
     parser.add_argument("--ensmean", action="store_true", help="ensemble mean")
     parser.add_argument("--nofineprint", action="store_true", help="no fine print (ci, time created, etc)")
     parser.add_argument("--noplot", action="store_true", help="no plot, just print all-forecast hour means)")
+    parser.add_argument("-v","--variable", type=str, default="bss", help="variable to plot")
     args = parser.parse_args()
     return args
 
@@ -40,6 +41,7 @@ def main():
     ensmean     = args.ensmean
     nofineprint = args.nofineprint
     noplot      = args.noplot
+    variable    = args.variable
 
     level = logging.INFO
     if debug:
@@ -51,7 +53,7 @@ def main():
     # Figure dimensions, line thicknesses, text alignment
     fig = plt.figure(figsize=(15,11))
     lw = 2  # line width for mean of members
-    text_kw = dict(fontsize=10, ha="left", va="center", clip_on=True) # clip_on in case bss is so low it squishes botax
+    text_kw = dict(fontsize=10, ha="left", va="center", clip_on=True) # clip_on in case variable is so low it squishes botax
     # If ci is zero, don't plot confidence band; plot individual lines for all members    
     if ci == 0:
         line_kw = dict(units="mem", estimator=None)
@@ -66,6 +68,8 @@ def main():
 
     logging.info(f"Read {len(ifiles)} input files into Pandas DataFrame, with nn column = filename")
     dfs = pd.concat([pd.read_csv(ifile,header=0).assign(nn=nns(ifile.name)) for ifile in ifiles], ignore_index=True) # ignore index or get duplicate indices
+
+
 
     # Append fold to mem and drop fold
     dfs["mem"] = dfs["mem"] + "." + dfs["fold"]
@@ -94,13 +98,13 @@ def main():
 
             iens = df["mem"] == "ensmean.all"
             imem = df["mem"] != "ensmean.all"
-            sns.lineplot(data=df[imem], x="fhr", y="bss",  ax=topax, style="nn", linewidth=lw, **line_kw)
+            sns.lineplot(data=df[imem], x="fhr", y=variable,  ax=topax, style="nn", linewidth=lw, **line_kw)
             if ensmean:
                 logging.info("ensemble mean")
-                sns.lineplot(data=df[iens], x="fhr", y="bss",  ax=topax, style="nn", color="black", lw=lw*0.25, legend=False)
-                topax.text(df.fhr.max(), df[iens]["bss"].iloc[-1], "ens. mean", **text_kw)
+                sns.lineplot(data=df[iens], x="fhr", y=variable,  ax=topax, style="nn", color="black", lw=lw*0.25, legend=False)
+                topax.text(df.fhr.max(), df[iens][variable].iloc[-1], "ens. mean", **text_kw)
                 topax.set_xlim(topax.get_xlim()[0], topax.get_xlim()[1]+2) # add space for "ensmean" label
-            topax.text(df.fhr.max(), df[imem].groupby("fhr")["bss"].mean().iloc[-1], " bss", **text_kw) # looks better preceded by space
+            topax.text(df.fhr.max(), df[imem].groupby("fhr")[variable].mean().iloc[-1], f" {variable}", **text_kw) # looks better preceded by space
 
             if difference_plot: # Plot difference between 2 input files on bottom axes
                 ddf = df.set_index(["class","mem","fhr","nn"])
@@ -109,19 +113,19 @@ def main():
                 diff = ddf.xs(nn0, level="nn") - ddf.xs(nn1, level="nn")
                 imem_diff = diff.index.get_level_values(level="mem") != "ensmean.all" # can't reuse imem and iens variables; they are used later
                 iens_diff = diff.index.get_level_values(level="mem") == "ensmean.all"
-                sns.lineplot(data=diff[imem_diff], x="fhr", y="bss",  ax=botax, linewidth=lw, **line_kw)
-                botax.set_ylabel(f"bss difference")
+                sns.lineplot(data=diff[imem_diff], x="fhr", y=variable,  ax=botax, linewidth=lw, **line_kw)
+                botax.set_ylabel(f"{variable} difference")
                 if plotauc:
                     # AUC difference on secondary axis (right side)
                     baxr=botax.twinx()
                     sns.lineplot(data=diff[imem_diff], x="fhr", y="auc",  ax=baxr, linewidth=lw, color="gold", **line_kw)
                     baxr.set_ylabel(f"auc difference")
-                    baxr.set_ylim(np.array(botax.get_ylim())/10) # make auc y-limits 1/10th bss y-limits
+                    baxr.set_ylim(np.array(botax.get_ylim())/10) # make auc y-limits 1/10th variable y-limits
                     baxr.grid(False) #needs to be after lineplot
                 botax.set_title(f"{nn0} - {nn1}", fontsize="small")
                 if ensmean:
-                    sns.lineplot(data=diff[iens_diff], x="fhr", y="bss",  ax=botax, color="black", linewidth=lw*0.25, legend=False)
-                    botax.text(df.fhr.max(), diff[iens_diff]["bss"].iloc[-1], " ens. mean bss diff", fontsize=7, ha="left", va="center")
+                    sns.lineplot(data=diff[iens_diff], x="fhr", y=variable,  ax=botax, color="black", linewidth=lw*0.25, legend=False)
+                    botax.text(df.fhr.max(), diff[iens_diff][variable].iloc[-1], " ens. mean {variable} diff", fontsize=7, ha="left", va="center")
 
 
             # Base rate
@@ -130,11 +134,12 @@ def main():
             base_rate_ax.text(df.fhr.max(), df["base rate"].iloc[-1], "base rate", **text_kw)
             base_rate_ax.xaxis.set_major_locator(ticker.MultipleLocator(3))
 
-            ylim = (0,0.4)
-            if cl == "flashes": ylim = (0,0.75)
-            if cl.startswith("torn") or cl.startswith("sig"): ylim = (-0.03, 0.1)
-            if cl.startswith("hailone"): ylim = (-0.03, 0.15)
-            topax.set_ylim(ylim)
+            if variable == "bss":
+                ylim = (-0.03,0.35)
+                if cl == "flashes": ylim = (0,0.75)
+                if cl.startswith("torn") or cl.startswith("sig"): ylim = (-0.03, 0.1)
+                if cl.startswith("hailone"): ylim = (-0.02, 0.18)
+                topax.set_ylim(ylim)
 
             if plotauc:
                 # AUC on secondary axis (right side)
@@ -157,8 +162,8 @@ def main():
             plt.clf()
 
         df_all = df_all[df_all.mem == "ensmean.all"].set_index("nn")
-        df_all = df_all.sort_values("bss",ascending=False)
-        print(df_all[["bss","base rate","auc"]])
+        df_all = df_all.sort_values(variable,ascending=False)
+        print(df_all[[variable,"base rate","auc","aps"]])
 
 if __name__ == "__main__":
     main()
