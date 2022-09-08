@@ -32,7 +32,7 @@ def baseline_model(input_dim=None, name=None,numclasses=None, neurons=16, layer=
     # Discard any pre-existing version of the model.
     model = Sequential(name=name)
     model.add(Dense(neurons, input_dim=input_dim, activation='relu', name="storm_and_env_features"))
-    for i in range(layer-1):
+    for i in range(layer-1): # TODO: figure out how to add dropout, batch normalization, and kernel regularization, even with only one layer. 
         model.add(Dropout(rate=dropout))
         if batch_normalize:
             model.add(BatchNormalization())
