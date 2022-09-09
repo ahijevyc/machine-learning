@@ -154,6 +154,10 @@ assert set(df.index.names) == set(['valid_time', 'projection_x_coordinate', 'pro
 # This script expects "forecast_hour" spelled out.
 df = df.rename(columns={"fhr": "forecast_hour", "init_time": "initialization_time"})
 
+# Make initialization_time a MultiIndex level
+df = df.set_index("initialization_time",append=True)
+
+
 validtimes = df.index.get_level_values(level="valid_time")
 logging.info(f"range of valid times: {validtimes.min()} - {validtimes.max()}")
 
@@ -161,6 +165,11 @@ logging.info(f"range of valid times: {validtimes.min()} - {validtimes.max()}")
 # This is done in train_stormrpts_dnn.py. Important to do here too.
 logging.info(f"Sort by valid_time")
 df = df.sort_index(level="valid_time") # Can't ignore_index=True like train_stormrpts_dnn.py cause we need multiindex, but it shouldn't affect order
+
+
+before_filtering  = len(df)
+df = df.loc[:,:,:,train_test_split_time:]
+logging.info(f"keep {len(df)}/{before_filtering} cases with init times at or later than {train_test_split_time}")
 
 
 if "HAILCAST_DIAM_MAX" in df and (df["HAILCAST_DIAM_MAX"] == 0).all():
@@ -172,24 +181,6 @@ df = df.drop(columns=rptcols)
 
 df.info()
 print(labels.sum())
-
-# Only keep cases with initialization times later than train_test_split_time.
-if "initialization_time" in df:
-    logging.info("save and drop initialization_time column")
-    idate = df.initialization_time.astype('datetime64[ns]')
-    df = df.drop(columns="initialization_time")
-else:
-    logging.info("derive initialization times")
-    idate = df.index.get_level_values(level="valid_time") - df["forecast_hour"] * datetime.timedelta(hours=1) 
-
-
-
-
-test_idx = idate >= train_test_split_time
-before_filtering  = len(df)
-df = df[test_idx]
-labels = labels[test_idx]
-logging.info(f"keep {len(df)}/{before_filtering} cases with init times at or later than {train_test_split_time}")
 
 assert labels.sum().all() > 0, "at least 1 class has no True labels in testing set"
 
@@ -285,19 +276,13 @@ def statjob(fhr,statcurves=None):
             Y = pd.concat([Y], keys=[ifold], names=["fold"]) # prepend "fold" level
             y_preds = y_preds.append(Y) # append this fit/fold to the y_preds DataFrame
     # I may have overlapping valid_times from different init_times like fhr=1 from today and fhr=25 from previous day
-    ensmean = y_preds.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate"]).mean() # average probability over all nfits and initialization_times valid at valid_time 
+    ensmean = y_preds.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate","initialization_time"]).mean() # average probability over all nfits initialized at initialization_time and valid at valid_time 
     assert "fit" not in ensmean.index.names, "fit should not be a MultiIndex level of ensmean, the average probability over nfits."
     thissavedmodel = savedmodel.replace('f01-f48', f'f{fhr}') # for statistic curves plot file name
     logging.debug(f"getting ensmean bss, base rate, auc, aps")
     for rpt_type in labels.columns:
         y_pred = ensmean[rpt_type]
         labels_fhr = labels.loc[this_fhr,rpt_type]
-        # probability averaged over all nfits and initialization_times valid at valid_time, eliminating multiple values for multiple initialization times. Do same for labels_fhrs.
-        # First and last label should be same for a particular valid_time, y, and x coordinate.
-        first_label = labels_fhr.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate"]).first()
-        last_label  = labels_fhr.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate"]).last()
-        assert first_label.equals(last_label), f"discrepancies in first and last forecasts valid at same valid time {(first != last).sum()}" 
-        labels_fhr = first_label # just need one instance of the duplicate labels
         assert labels_fhr.index.equals(y_pred.index), f'{rpt_type} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
         bss = brier_skill_score(labels_fhr, y_pred)
         base_rate = labels_fhr.mean()
@@ -323,7 +308,7 @@ def statjob(fhr,statcurves=None):
     return stattxt
 
 if debug:
-    stattxt = statjob(2, statcurves=True)
+    stattxt = statjob('all', statcurves=True)
     pdb.set_trace()
     sys.exit(0)
 
