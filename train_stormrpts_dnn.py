@@ -178,7 +178,7 @@ def main():
         if alsoHRRRv4: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.noN7.par'
         scalingfile = f"/glade/work/ahijevyc/NSC_objects/{model}/scaling_values_all_HRRRX.pk"
     elif model == "NSC3km-12sec":
-        ifile = f'{model}{glmstr}.par'
+        ifile = f'{model}.par'
         scalingfile = f"scaling_values_{model}_{train_test_split_time:%Y%m%d_%H%M}.pk"
 
     if os.path.exists(ifile):
