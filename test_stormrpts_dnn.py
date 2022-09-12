@@ -313,7 +313,7 @@ if debug:
     sys.exit(0)
 
 fhrs = range(1,nfhr+1)
-fhrs = df.forecast_hour.unique() # allow for datasets, like storm mode probabilities, that don't start at fhr=1
+fhrs = df.forecast_hour.unique() # allow for datasets like storm mode probabilities, that don't start at fhr=1
 fhrs = list(fhrs)
 fhrs.insert(0,"all") # put "all" first because it takes the longest
 if nprocs:

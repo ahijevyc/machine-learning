@@ -125,7 +125,7 @@ def main():
                 botax.set_title(f"{nn0} - {nn1}", fontsize="small")
                 if ensmean:
                     sns.lineplot(data=diff[iens_diff], x="fhr", y=variable,  ax=botax, color="black", linewidth=lw*0.25, legend=False)
-                    botax.text(df.fhr.max(), diff[iens_diff][variable].iloc[-1], " ens. mean {variable} diff", fontsize=7, ha="left", va="center")
+                    botax.text(df.fhr.max(), diff[iens_diff][variable].iloc[-1], f" ens. mean {variable} diff", fontsize=7, ha="left", va="center")
 
 
             # Base rate
@@ -161,6 +161,7 @@ def main():
             logging.info(os.path.realpath(ofile))
             plt.clf()
 
+        # Look at the aggregrate scores for "all" forecast hours. Not what was plotted.
         df_all = df_all[df_all.mem == "ensmean.all"].set_index("nn")
         df_all = df_all.sort_values(variable,ascending=False)
         print(df_all[[variable,"base rate","auc","aps"]])
