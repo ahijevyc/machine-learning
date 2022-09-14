@@ -57,7 +57,7 @@ def get_argparser():
     parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
     parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
     parser.add_argument('--splittime', type=lambda s: pd.to_datetime(s), default="202012021200", help="train with storms before this time; test this time and after")
-    parser.add_argument('--suite', type=str, default='default', choices=["default","with_storm_mode","with_cnn_storm_mode"], help="name for suite of training features")
+    parser.add_argument('--suite', type=str, default='default', help="name for suite of training features")
     parser.add_argument('--twin', type=int, default=2, help="time window in hours")
     return parser
 
@@ -183,66 +183,59 @@ def upscale(field, nngridpts, type='mean', maxsize=27):
 
     return field_interp
 
-def get_features(subset='all'):
-    # complex features
-    explicit_features = [ 'COMPOSITE_REFL_10CM', 'REFD_MAX', 'UP_HELI_MAX', 'UP_HELI_MAX03', 'UP_HELI_MAX01', 'W_UP_MAX', 'W_DN_MAX', 'WSPD10MAX', 'RAINNC_1H' ]
-    env_features      = [ 'MUCAPE', 'SBCAPE', 'SBCINH', 'SHR01', 'SHR06', 'MLCINH', 'MLLCL', 'SRH01', 'SRH03', 'T2', 'TD2', 'PSFC','CAPESHEAR', 'STP', 'LR75' ]
-    env_features.remove('PSFC') # suspect before Sep 2015
-    static_features   = [ 'fhr', 'dayofyear', 'lat', 'lon', 'hgt' ]
+def get_features(args, subset=None):
+    if args.model == "HRRR":
+        features = [ "CAPESHEAR", "CAPESHEAR-N3T1", "CAPESHEAR-N3T3", "CAPESHEAR-N3T5", "CAPESHEAR-N5T1", "CAPESHEAR-N5T3", "CAPESHEAR-N5T5", "CREF", "CREF-N3T1", "CREF-N3T3", "CREF-N3T5",
+                    "CREF-N5T1", "CREF-N5T3", "CREF-N5T5", "GRPL_MAX", "GRPL_MAX-N3T1", "GRPL_MAX-N3T3", "GRPL_MAX-N3T5", "GRPL_MAX-N5T1", "GRPL_MAX-N5T3", "GRPL_MAX-N5T5", "HAIL_SFC",
+                    "HAIL_SFC-N3T1", "HAIL_SFC-N3T3", "HAIL_SFC-N3T5", "HAIL_SFC-N5T1", "HAIL_SFC-N5T3", "HAIL_SFC-N5T5", "HGT0C", "HGT0C-N3T1", "HGT0C-N3T3", "HGT0C-N3T5", "HGT0C-N5T1",
+                    "HGT0C-N5T3", "HGT0C-N5T5", "LR75", "LTG1", "LTG1-N3T1", "LTG1-N3T3", "LTG1-N3T5", "LTG1-N5T1", "LTG1-N5T3", "LTG1-N5T5", "LTG2", "LTG2-N3T1", "LTG2-N3T3", "LTG2-N3T5",
+                    "LTG2-N5T1", "LTG2-N5T3", "LTG2-N5T5", "LTG3", "LTG3-N3T1", "LTG3-N3T3", "LTG3-N3T5", "LTG3-N5T1", "LTG3-N5T3", "LTG3-N5T5", "Local_Solar_Hour_cos", "Local_Solar_Hour_sin",
+                    "MLCAPE", "MLCINH", "MLCINH-N3T1", "MLCINH-N3T3", "MLCINH-N3T5", "MLCINH-N5T1", "MLCINH-N5T3", "MLCINH-N5T5", "MUCAPE", "MUCAPE-N3T1", "MUCAPE-N3T3", "MUCAPE-N3T5", "MUCAPE-N5T1",
+                    "MUCAPE-N5T3", "MUCAPE-N5T5", "PREC_ACC_NC", "PREC_ACC_NC-N3T1", "PREC_ACC_NC-N3T3", "PREC_ACC_NC-N3T5", "PREC_ACC_NC-N5T1", "PREC_ACC_NC-N5T3", "PREC_ACC_NC-N5T5", "PSFC",
+                    "PSFC-N3T1", "PSFC-N3T3", "PSFC-N3T5", "PSFC-N5T1", "PSFC-N5T3", "PSFC-N5T5", "RVORT1", "RVORT1-N3T1", "RVORT1-N3T3", "RVORT1-N3T5", "RVORT1-N5T1", "RVORT1-N5T3", "RVORT1-N5T5",
+                    "SBCAPE", "SBCAPE-N3T1", "SBCAPE-N3T3", "SBCAPE-N3T5", "SBCAPE-N5T1", "SBCAPE-N5T3", "SBCAPE-N5T5", "SBCINH", "SBCINH-N3T1", "SBCINH-N3T3", "SBCINH-N3T5", "SBCINH-N5T1",
+                    "SBCINH-N5T3", "SBCINH-N5T5", "SBLCL", "SBLCL-N3T1", "SBLCL-N3T3", "SBLCL-N3T5", "SBLCL-N5T1", "SBLCL-N5T3", "SBLCL-N5T5", "SHR01", "SHR01-N3T1", "SHR01-N3T3", "SHR01-N3T5",
+                    "SHR01-N5T1", "SHR01-N5T3", "SHR01-N5T5", "SHR06", "SHR06-N3T1", "SHR06-N3T3", "SHR06-N3T5", "SHR06-N5T1", "SHR06-N5T3", "SHR06-N5T5", "SRH01", "SRH01-N3T1", "SRH01-N3T3",
+                    "SRH01-N3T5", "SRH01-N5T1", "SRH01-N5T3", "SRH01-N5T5", "SRH03", "SRH03-N3T1", "SRH03-N3T3", "SRH03-N3T5", "SRH03-N5T1", "SRH03-N5T3", "SRH03-N5T5", "STP", "STP-N3T1",
+                    "STP-N3T3", "STP-N3T5", "STP-N5T1", "STP-N5T3", "STP-N5T5", "T2", "T2-N3T1", "T2-N3T3", "T2-N3T5", "T2-N5T1", "T2-N5T3", "T2-N5T5", "T500", "T700", "T850", "T925",
+                    "TD2", "TD2-N3T1", "TD2-N3T3", "TD2-N3T5", "TD2-N5T1", "TD2-N5T3", "TD2-N5T5", "TD500", "TD700", "TD850", "TD925", "U500", "U700", "U850", "U925", "UP_HELI_MAX",
+                    "UP_HELI_MAX-N1T5", "UP_HELI_MAX-N3T1", "UP_HELI_MAX-N3T3", "UP_HELI_MAX-N3T5", "UP_HELI_MAX-N5T1", "UP_HELI_MAX-N5T3", "UP_HELI_MAX-N5T5", "UP_HELI_MAX02", "UP_HELI_MAX02-N3T1",
+                    "UP_HELI_MAX02-N3T3", "UP_HELI_MAX02-N3T5", "UP_HELI_MAX02-N5T1", "UP_HELI_MAX02-N5T3", "UP_HELI_MAX02-N5T5", "UP_HELI_MAX03", "UP_HELI_MAX03-N3T1", "UP_HELI_MAX03-N3T3",
+                    "UP_HELI_MAX03-N3T5", "UP_HELI_MAX03-N5T1", "UP_HELI_MAX03-N5T3", "UP_HELI_MAX03-N5T5", "UP_HELI_MAX120", "UP_HELI_MAX120-N1T5", "UP_HELI_MAX80", "UP_HELI_MAX80-N1T5",
+                    "UP_HELI_MIN", "UP_HELI_MIN-N3T1", "UP_HELI_MIN-N3T3", "UP_HELI_MIN-N3T5", "UP_HELI_MIN-N5T1", "UP_HELI_MIN-N5T3", "UP_HELI_MIN-N5T5", "V500", "V700", "V850", "V925",
+                    "WSPD10MAX", "WSPD10MAX-N3T1", "WSPD10MAX-N3T3", "WSPD10MAX-N3T5", "WSPD10MAX-N5T1", "WSPD10MAX-N5T3", "WSPD10MAX-N5T5", "W_DN_MAX", "W_DN_MAX-N3T1", "W_DN_MAX-N3T3",
+                    "W_DN_MAX-N3T5", "W_DN_MAX-N5T1", "W_DN_MAX-N5T3", "W_DN_MAX-N5T5", "W_UP_MAX", "W_UP_MAX-N3T1", "W_UP_MAX-N3T3", "W_UP_MAX-N3T5", "W_UP_MAX-N5T1", "W_UP_MAX-N5T3",
+                    "W_UP_MAX-N5T5", "dayofyear_cos", "dayofyear_sin", "forecast_hour", "lat", "lon"]
 
-    large_scale_features = ['U925','U850','U700','U500','V925','V850','V700','V500','T925','T850','T700','T500','TD925','TD850','TD700','TD500']
+    if args.model == "NSC3km-12sec":
+        features = ["forecast_hour", "UP_HELI_MAX120-N1T5", "MUCAPE-N5T5", "UP_HELI_MAX-N5T5", "CAPESHEAR-N5T5", "UP_HELI_MAX03", "SRH01-N3T5", "SHR06-N5T3", "T2-N3T3", "UP_HELI_MAX01",
+                    "T2-N5T5", "SBCINH-N5T3", "MUCAPE-N3T3", "UP_HELI_MAX-N3T1", "SRH03-N3T5", "WSPD10MAX-N5T3", "SRH03-N3T3", "UP_HELI_MAX80-N1T5", "UP_HELI_MAX", "UP_HELI_MAX03-N3T5",
+                    "MLCINH", "MUCAPE-N5T1", "SBCINH", "U925", "U500", "PREC_ACC_NC-N5T5", "SBCINH-N3T3", "UP_HELI_MAX01-N5T3", "W_UP_MAX", "SBCAPE-N5T3", "SBCAPE", "STP-N3T1", "SHR06-N5T1",
+                    "MLLCL-N5T3", "SHR01-N5T5", "SRH01-N3T3", "STP-N3T3", "SHR01-N3T3", "TD2-N3T3", "PSFC-N3T5", "CAPESHEAR-N3T3", "UP_HELI_MAX01-N3T3", "W_UP_MAX-N3T3", "U850",
+                    "PSFC-N5T5", "UP_HELI_MAX03-N5T3", "V925", "W_UP_MAX-N5T3", "MUCAPE", "STP-N5T1", "WSPD10MAX-N3T5", "UP_HELI_MAX01-N5T1", "UP_HELI_MAX01-N3T1", "T850", "W_DN_MAX-N5T3",
+                    "PSFC-N5T1", "UP_HELI_MAX01-120", "UP_HELI_MAX01-N1T5", "U700", "PREC_ACC_NC-N5T3", "SBCINH-N3T5", "W_UP_MAX-N5T5", "SRH03-N5T5", "lon", "UP_HELI_MAX01-N3T5", "SBCAPE-N5T1",
+                    "W_DN_MAX-N3T3", "PSFC-N5T3", "SRH01-N5T1", "lat", "SBCAPE-N3T5", "SBCAPE-N3T3", "SRH01-N5T3", "PREC_ACC_NC-N3T1", "MLLCL-N5T5", "TD700", "CAPESHEAR-N5T3", "UP_HELI_MAX03-N3T1",
+                    "SRH03-N5T3", "MLLCL-N3T3", "PSFC", "MLLCL-N3T1", "UP_HELI_MAX-N3T3", "UP_HELI_MAX03-N5T1", "TD2-N3T1", "MUCAPE-N3T1", "SRH03", "SBCAPE-N3T1", "TD2-N5T1", "SHR06",
+                    "MLLCL-N3T5", "UP_HELI_MAX01-N5T5", "SBCAPE-N5T5", "T2-N3T1", "UP_HELI_MAX01-120-N1T5", "T2-N5T3", "TD2-N5T5", "STP-N3T5", "T925", "TD925", "SBCINH-N5T1", "SHR06-N3T3",
+                    "SHR01", "W_DN_MAX-N5T1", "SHR01-N5T1", "PSFC-N3T1", "UP_HELI_MAX-N5T3", "TD2", "STP-N5T3", "PSFC-N3T3", "SHR01-N3T5", "MLLCL-N5T1", "UP_HELI_MAX120", "PREC_ACC_NC-N3T3",
+                    "UP_HELI_MAX-N5T1", "UP_HELI_MAX80", "PREC_ACC_NC", "SHR06-N3T1", "W_DN_MAX-N3T1", "W_UP_MAX-N3T1", "SRH01", "W_UP_MAX-N3T5", "T2", "UP_HELI_MAX03-N5T5", "TD850",
+                    "SHR01-N3T1", "T2-N3T5", "STP-N5T5", "UP_HELI_MAX03-N3T3", "MUCAPE-N3T5", "WSPD10MAX-N3T3", "W_DN_MAX-N5T5", "MLLCL", "CAPESHEAR-N3T5", "SHR06-N3T5", "V700",
+                    "SBCINH-N5T5", "T500", "TD2-N3T5", "STP", "CAPESHEAR-N5T1", "W_DN_MAX-N3T5", "SBCINH-N3T1", "WSPD10MAX-N3T1", "PREC_ACC_NC-N3T5", "CAPESHEAR-N3T1", "WSPD10MAX-N5T5",
+                    "SRH01-N3T1", "WSPD10MAX-N5T1", "CAPESHEAR", "V500", "WSPD10MAX", "W_UP_MAX-N5T1", "MUCAPE-N5T3", "T2-N5T1", "TD500", "SRH03-N3T1", "SHR06-N5T5", "SHR01-N5T3",
+                    "SRH01-N5T5", "T700", "W_DN_MAX", "PREC_ACC_NC-N5T1", "SRH03-N5T1", "TD2-N5T3", "V850", "UP_HELI_MAX-N3T5", "UP_HELI_MAX-N1T5", "LR75"] 
+        
+        if args.suite == "with_storm_mode":
+            features.extend([ "SS_Supercell_prob", "SS_Supercell", "SS_Supercell_nprob", "SS_QLCS_prob", "SS_QLCS", "SS_QLCS_nprob", "SS_Disorganized_prob", "SS_Disorganized",
+                    "SS_Disorganized_nprob", "CNN_1_Supercell_prob", "CNN_1_Supercell", "CNN_1_Supercell_nprob", "CNN_1_QLCS_prob", "CNN_1_QLCS", "CNN_1_QLCS_nprob", "CNN_1_Disorganized_prob",
+                    "CNN_1_Disorganized", "CNN_1_Disorganized_nprob", "DNN_1_Supercell_prob", "DNN_1_Supercell", "DNN_1_Supercell_nprob", "DNN_1_QLCS_prob", "DNN_1_QLCS",
+                    "DNN_1_QLCS_nprob", "DNN_1_Disorganized_prob", "DNN_1_Disorganized", "DNN_1_Disorganized_nprob"])
+        elif args.suite == "with_CNN_DNN_storm_mode_nprob":
+            features.extend(["CNN_1_Supercell_nprob", "CNN_1_QLCS_nprob", "CNN_1_Disorganized_nprob", "DNN_1_Supercell_nprob", "DNN_1_QLCS_nprob", "DNN_1_Disorganized_nprob"])
+        
+        features.extend(["dayofyear_sin", "dayofyear_cos", "Local_Solar_Hour_sin", "Local_Solar_Hour_cos"])
+        
 
-    simple_max_fields = ['COMPOSITE_REFL_10CM', 'REFD_MAX', 'UP_HELI_MAX', 'UP_HELI_MAX03', 'UP_HELI_MAX01', 'W_UP_MAX', 'W_DN_MAX', 'WSPD10MAX', 'RAINNC_1H']
-    simple_mean_fields = ['STP', 'CAPESHEAR', 'MUCAPE', 'SBCAPE', 'MLCINH', 'SBCINH', 'MLLCL', 'SHR06', 'SHR01', 'SRH03', 'SRH01', 'T2', 'TD2', 'PSFC']
-
-
-    nbrs = [3,5]
-    if "7x7" in subset:
-        nbrs = [3,5,7]
-    simple_max_features = [ f+'-N%dT%d'%(x,t) for f in simple_max_fields for x in nbrs for t in [1,3,5] ]
-    simple_mean_features = [ f+'-N%dT%d'%(x,t) for f in simple_mean_fields for x in nbrs for t in [1,3,5] ]
-
-
-    basic_features = static_features + explicit_features + env_features
-    
-    # all fields
-    if subset == 'all': features = static_features + explicit_features + env_features + large_scale_features + simple_max_features + simple_mean_features
-
-    # UH only
-    if subset == 'uhonly': features = static_features + ['UP_HELI_MAX', 'UP_HELI_MAX-N3T1', 'UP_HELI_MAX-N3T3', \
-                                       'UP_HELI_MAX-N3T5', 'UP_HELI_MAX-N5T1', 'UP_HELI_MAX-N5T3', 'UP_HELI_MAX-N5T5']
-    # basic features only
-    if subset == 'basic': features = basic_features
-
-    # basic + largescale only
-    if subset == 'basiclarge': features = basic_features + large_scale_features
-
-    # environmental features only
-    if subset == 'envonly': features = static_features + env_features + large_scale_features + simple_mean_features
-
-    # no upper air features (this also removed the explicit features accidentally...
-    if subset == 'noupperair': features = static_features + env_features + simple_mean_features + simple_max_features
-
-    if subset[0:11] == 'basic_nbrhd': features = basic_features + simple_mean_features + simple_max_features
-
-
-    if subset == 'storm':
-        features = ["SBCAPE", "UP_HELI_MAX", "W_UP_MAX", "SHR06", "CAPESHEAR", "TD2", "PREC_ACC_NC", "WSPD10MAX", "STP", "GRPL_MAX", "HGT0C", "CAPESHEAR-N3T1"]
-    if subset == 'env':
-        features = ["SBCAPE", "SHR06", "CAPESHEAR", "TD2", "STP", "HGT0C", "CAPESHEAR-N3T1"]
-    if 'ens_mean' in subset:
-        features_c = features.copy()
-        for fcn in ["std", "max", "min"]:
-            if '_'+fcn in subset:
-                # add " xxx" versions of each feature
-                features += [x + " " + fcn for x in features_c]
-                # remove functions of static features
-                for static in ["lon", "lat", "hgt", "fhr", "dayofyear"]:
-                    features.remove(static + " " + fcn)
-
-    features = list(set(features)) # no duplicates
-
-    features.sort()
+    assert len(set(features)) == len(features), f"repeated feature(s) {set(features)}"
 
     return features
 
