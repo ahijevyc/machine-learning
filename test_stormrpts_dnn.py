@@ -5,7 +5,7 @@ from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, get_argparser, get_glm, rptdist2bool, savedmodel_default
+from ml_functions import brier_skill_score, get_argparser, get_features, get_glm, rptdist2bool, savedmodel_default
 import multiprocessing
 import numpy as np
 import os
@@ -75,9 +75,6 @@ else:
 logging.info(f"savedmodel={savedmodel}")
 
 
-if kfold:
-    logging.info(f"Do not apply train_test_split_time if KFold was used. KFold will do the splitting.")
-    train_test_split_time = pd.to_datetime("19010101")
 for ifold in range(kfold):
     for i in range(0,nfit):
         savedmodel_i = f"nn/nn_{savedmodel}_{i}/{kfold}fold{ifold}"
@@ -111,7 +108,7 @@ if model == "HRRR":
     scalingfile = "/glade/work/ahijevyc/NSC_objects/HRRR/scaling_values_all_HRRRX.pk"
     nfhr = 48
 elif model == "NSC3km-12sec":
-    ifile0 = f'{model}{glmstr}.par'
+    ifile0 = f'{model}.par'
     scalingfile = f"scaling_values_{model}_{train_test_split_time:%Y%m%d_%H%M}.pk"
     nfhr = 36
 
@@ -167,16 +164,15 @@ logging.info(f"Sort by valid_time")
 df = df.sort_index(level="valid_time") # Can't ignore_index=True like train_stormrpts_dnn.py cause we need multiindex, but it shouldn't affect order
 
 
+
+logging.info(f"Drop initialization times at or after {train_test_split_time}")
 before_filtering  = len(df)
 df = df.loc[:,:,:,train_test_split_time:]
 logging.info(f"keep {len(df)}/{before_filtering} cases with init times at or later than {train_test_split_time}")
 
 
-if "HAILCAST_DIAM_MAX" in df and (df["HAILCAST_DIAM_MAX"] == 0).all():
-    logging.info("HAILCAST_DIAM_MAX all zeros. Dropping.")
-    df = df.drop(columns="HAILCAST_DIAM_MAX")
-
-labels = df[rptcols] # converted to Boolean above
+logging.info(f"Split {len(rptcols)} labels away from predictors")
+labels = df[rptcols] # labels converted to Boolean above
 df = df.drop(columns=rptcols)
 
 df.info()
@@ -184,21 +180,19 @@ print(labels.sum())
 
 assert labels.sum().all() > 0, "at least 1 class has no True labels in testing set"
 
+
+
+before_filtering = len(df.columns)
+df = df[get_features(args)]
+logging.info(f"keeping {len(df.columns)}/{before_filtering} predictors")
+
+
+
 logging.info(f"normalize with training cases mean and std in {scalingfile}")
 sv = pd.read_pickle(scalingfile) # conda activate tf if AttributeError: Can't get attribute 'new_block' on...
 if "fhr" in sv:
     logging.info("change fhr to forecast_hour in scaling DataFrame")
     sv = sv.rename(columns={"fhr": "forecast_hour"})
-
-logging.info("Make sure no 7x7 neighborhood predictors are present")
-assert all("-N7" not in x for x in df.columns), "-N7 in df. expected them to be dropped already"
-logging.info("no 7x7")
-
-storm_mode_columns = [x for x in df.columns if "SS_" in x or "NN_" in x]
-if "with_storm_mode" not in suite and len(storm_mode_columns) > 0:
-    logging.info(f"Dropping {len(storm_mode_columns)} storm mode columns.")
-    df = df.drop(columns=storm_mode_columns)
-
 
 # You might have scaling factors for columns that you dropped already, like -N7 columns.
 extra_sv_columns = set(sv.columns) - set(df.columns)
@@ -206,8 +200,12 @@ if extra_sv_columns:
     logging.info(f"dropping {len(extra_sv_columns)} extra scaling factor columns {extra_sv_columns}")
     sv = sv.drop(columns=extra_sv_columns)
 
-
-cv = KFold(n_splits=kfold)
+if kfold > 1:
+    cv = KFold(n_splits=kfold)
+    cvsplit = cv.split(df)
+else:
+    # Put all cases in test split. They are already after train_test_split_time.
+    cvsplit = [([], np.arange(len(df)))]
 
 def statjob(fhr,statcurves=None):
     if statcurves is None:
@@ -222,7 +220,7 @@ def statjob(fhr,statcurves=None):
     # test model
     y_preds = pd.DataFrame()
     stattxt = ""
-    for ifold, (train_index, test_index) in enumerate(cv.split(df)):
+    for ifold, (train_index, test_index) in enumerate(cvsplit):
         df_fold = df.iloc[test_index]
         labels_fold = labels.iloc[test_index]
         if fhr == "all":

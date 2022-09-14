@@ -5,7 +5,7 @@ import glob
 from hwtmode.data import decompose_circular_feature
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, get_argparser, get_glm, get_optimizer, rptdist2bool, savedmodel_default
+from ml_functions import brier_skill_score, get_argparser, get_features, get_glm, get_optimizer, rptdist2bool, savedmodel_default
 import numpy as np
 import os
 import pandas as pd
@@ -16,28 +16,26 @@ import re
 import sys
 from sklearn.model_selection import KFold, GroupKFold, train_test_split
 from sklearn.preprocessing import LabelEncoder
-#import tensorflow.keras.backend # maybe delete? 
-from tensorflow.keras.layers import Dense, Dropout, BatchNormalization
+import tensorflow as tf
+from tensorflow.keras.layers import Dropout, BatchNormalization
 from tensorflow.keras.metrics import MeanSquaredError, AUC
-from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.regularizers import L2
-import time
 import visualizecv # custom script by ahijevyc modified from sklearn web page
 import xarray
 import yaml
 
-def baseline_model(input_dim=None, name=None,numclasses=None, neurons=16, layer=2, kernel_regularizer=None, 
+def baseline_model(input_dim=None, name=None, numclasses=None, neurons=16, layer=2, kernel_regularizer=None, 
         optimizer='adam', dropout=0, batch_normalize=False, learningrate=0.01):
 
     # Discard any pre-existing version of the model.
-    model = Sequential(name=name)
-    model.add(Dense(neurons, input_dim=input_dim, activation='relu', name="storm_and_env_features"))
-    for i in range(layer-1): # TODO: figure out how to add dropout, batch normalization, and kernel regularization, even with only one layer. 
+    model = tf.keras.models.Sequential(name=name)
+    # Previously used Dense here by providing input_dim, neurons, and activation args. Dense also made an input (layer). 
+    model.add(tf.keras.Input(shape=input_dim)) 
+    for i in range(layer): # add dropout, batch normalization, and kernel regularization, even with only one layer. 
+        model.add(tf.keras.layers.Dense(neurons, activation='relu', kernel_regularizer=kernel_regularizer))
         model.add(Dropout(rate=dropout))
-        if batch_normalize:
-            model.add(BatchNormalization())
-        model.add(Dense(neurons, activation='relu', kernel_regularizer=kernel_regularizer))
-    model.add(Dense(numclasses, activation='sigmoid')) # used softmax in HWT_mode to add to 1
+        if batch_normalize: model.add(BatchNormalization())
+    model.add(tf.keras.layers.Dense(numclasses, activation='sigmoid')) # used softmax in HWT_mode to add to 1
 
     # Compile model with optimizer and loss function. MSE is same as brier_score.
     loss="binary_crossentropy" # in HWT_mode, I used categorical_crossentropy
@@ -296,61 +294,39 @@ def main():
     df = df.sort_index(level="valid_time", ignore_index=True)
 
 
-
-    if "HAILCAST_DIAM_MAX" in df and (df["HAILCAST_DIAM_MAX"] == 0).all():
-        logging.info("HAILCAST_DIAM_MAX all zeros. Dropping.")
-        df = df.drop(columns="HAILCAST_DIAM_MAX")
-
-
-
-    if "with_storm_mode" not in suite:
-        logging.info("making sure predictors don't include storm mode")
-        storm_mode_columns = [x for x in df.columns if "SS_" in x or "NN_" in x]
-        df = df.drop(columns=storm_mode_columns)
+    # HRRRv3 to v4 at 20201202 0z.
+    logging.info(f"Drop initialization times at or after {train_test_split_time}")
+    before_filtering = len(df)
+    train_idx  = df.initialization_time.astype('datetime64[ns]') < train_test_split_time 
+    df = df.drop(columns="initialization_time")
+    df = df[train_idx]
+    logging.info(f"keep {len(df)}/{before_filtering} cases with init times at or later than {train_test_split_time}")
 
 
-
-
-
-
-    # Split labels away from predictors
-    labels = df[rptcols] # converted to Boolean above
+    logging.info(f"Split {len(rptcols)} labels away from predictors")
+    labels = df[rptcols] # labels converted to Boolean above
     df = df.drop(columns=rptcols)
-
-
-
-
-
 
     df.info()
     print(labels.sum())
 
+    assert all(labels.sum()) > 0, "some classes have no True labels in training set"
 
 
-
-    # Split into training and testing cases
-
-    # HRRRv3 to v4 at 20201202 0z.
-    idate = df.initialization_time.astype('datetime64[ns]') # used for train_test_split_time 
-    df = df.drop(columns="initialization_time")
-    logging.info(f"train test split time {train_test_split_time}")
-    test_idx  = (idate >= train_test_split_time) & (idate < pd.to_datetime("20211031")) # Mar 1 - Oct 31 2021 # changed > to >= on Jun 28, 2022
-    train_idx = ~test_idx
-    df_train = df[train_idx]
-    df_test  = df[test_idx]
-    train_labels = labels[train_idx]
-    test_labels  = labels[test_idx]
-
-    assert all(train_labels.sum()) > 0, "some classes have no True labels in training set"
+    # This filtering of features must occur after initialization time is used and discarded, and after labels are separated and saved. 
+    before_filtering = df.columns
+    df = df[get_features(args)]
+    logging.info(f"dropped features {set(before_filtering) - set(df.columns)}")
+    logging.info(f"kept {len(df.columns)}/{len(before_filtering)} features")
 
 
-    logging.info("normalize data using training set")
+    logging.info(f"normalize data with training cases mean and std in {scalingfile}")
     if os.path.exists(scalingfile):
         logging.info(f"using pickle file {scalingfile}")
         sv = pickle.load(open(scalingfile, "rb")).astype(np.float32)
     else:
-        logging.info(f"calculate mean and std, save to {scalingfile}")
-        sv = df_train.describe()
+        logging.info(f"calculating mean and std and saving to {scalingfile}")
+        sv = df.describe()
         sv.to_pickle(scalingfile)
 
     # You might have scaling factors for columns that you dropped already, like -N7 columns.
@@ -363,27 +339,31 @@ def main():
     stdiszero = sv.loc["std"] == 0
     if stdiszero.any():
         logging.error(f"{sv.columns[stdiszero]} std equals zero")
-    df_train = (df_train - sv.loc["mean"]) / sv.loc["std"]
-    df_test  = (df_test  - sv.loc["mean"]) / sv.loc["std"]
+    df = (df - sv.loc["mean"]) / sv.loc["std"]
     logging.info('done normalizing')
 
-    df_train.info()
+    df.info()
 
-    if df_train.describe().isna().any().any():
-        logging.error(f"nan(s) in {df_train.columns[df_train.mean().isna()]}")
+    if df.describe().isna().any().any():
+        logging.error(f"nan(s) in {df.columns[df.mean().isna()]}")
 
-    cv = KFold(n_splits=kfold) 
+    if kfold > 1:
+        cv = KFold(n_splits=kfold) 
+        cvsplit = cv.split(df, labels) # labels has no effect for KFold, but for GroupKFold, it, along with groups argument would affect folds.
+        plot_splits= False
+        if plot_splits:
+            fig, ax = plt.subplots()
+            y = labels["any_rptdist_2hr"]
+            n_splits = kfold
+            visualizecv.plot_cv_indices(cv, df, y, None, ax, n_splits)
+            plt.show()
+    else:
+        # Use everything for training. train_split is every index; test_split is empty
+        cvsplit = [(np.arange(len(df)), [])]
 
-    plot_splits= False
-    if plot_splits:
-        fig, ax = plt.subplots()
-        y = train_labels["any_rptdist_2hr"]
-        n_splits = kfold
-        visualizecv.plot_cv_indices(cv, df_train, y, None, ax, n_splits)
-        plt.show()
 
 
-    for ifold, (train_split, test_split) in enumerate(cv.split(df_train, train_labels)): # train_labels has no effect for KFold, but for GroupKFold, it, along with groups argument would affect folds.
+    for ifold, (train_split, test_split) in enumerate(cvsplit): 
         if folds and ifold not in folds: continue # just do specific folds (needed for OOM issue in 1024-neuron GPU cases)
 
         # train model
@@ -395,9 +375,10 @@ def main():
                 logging.info(f"{model_i} exists")
             else:
                 logging.info(f"fitting {model_i}")
-                model = baseline_model(input_dim=df_train.columns.size, numclasses=train_labels.columns.size, neurons=neurons[0], layer=layer, name=f"fit_{i}",
+                tf.keras.backend.clear_session()
+                model = baseline_model(input_dim=df.columns.size, numclasses=labels.columns.size, neurons=neurons[0], layer=layer, name=f"fit_{i}",
                         kernel_regularizer=L2(l2=reg_penalty), optimizer=optimizer, dropout=dropout)
-                history = model.fit(df_train.iloc[train_split].to_numpy(dtype='float32'), train_labels.iloc[train_split].to_numpy(dtype='float32'), class_weight=None, 
+                history = model.fit(df.iloc[train_split].to_numpy(dtype='float32'), labels.iloc[train_split].to_numpy(dtype='float32'), class_weight=None, 
                         sample_weight=None, batch_size=batchsize, epochs=epochs, verbose=2)
                 logging.debug(f"saving {model_i}")
                 model.save(model_i)
@@ -406,10 +387,10 @@ def main():
                 # Save order of columns, scaling factors, all arguments.
                 with open(os.path.join(model_i, "config.yaml"), "w") as yfile:
                     yaml.dump(
-                            dict(columns=df_train.columns.to_list(),
-                                mean=sv.loc["mean"].reindex(df_train.columns).to_list(),
-                                std=sv.loc["std"].reindex(df_train.columns).to_list(),
-                                labels=train_labels.columns.to_list(),
+                            dict(columns=df.columns.to_list(),
+                                mean=sv.loc["mean"].reindex(df.columns).to_list(),
+                                std=sv.loc["std"].reindex(df.columns).to_list(),
+                                labels=labels.columns.to_list(),
                                 args=args,
                                 ), yfile)
 
