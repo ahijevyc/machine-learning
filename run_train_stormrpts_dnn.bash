@@ -34,6 +34,9 @@ do
     if [[ $line == *"--neurons 1024"* || $line == *"--neurons 256"* ]]; then
         for fold in 0 1 2 3 4
         do
+            if [[ $line == *"--kfold 1"* && $fold > 0 ]]; then
+                continue
+            fi
             cat <<EOS | qsub
 #!/bin/csh
 #PBS -A NMMM0021
@@ -42,7 +45,7 @@ do
 #PBS -j oe
 #PBS -l walltime=0:45:00
 #PBS -l gpu_type=v100
-#PBS -l select=1:ncpus=1:ngpus=1:mem=130GB
+#PBS -l select=1:ncpus=1:ngpus=1:mem=$mem
 #PBS -o $i.$fit.$fold.out
 #PBS -q casper
 
