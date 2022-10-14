@@ -300,7 +300,7 @@ def main():
     train_idx  = df.initialization_time.astype('datetime64[ns]') < train_test_split_time 
     df = df.drop(columns="initialization_time")
     df = df[train_idx]
-    logging.info(f"keep {len(df)}/{before_filtering} cases with init times at or later than {train_test_split_time}")
+    logging.info(f"keep {len(df)}/{before_filtering} cases with init times earlier than {train_test_split_time}")
 
 
     logging.info(f"Split {len(rptcols)} labels away from predictors")
