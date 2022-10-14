@@ -87,7 +87,7 @@ def rptdist2bool(df, rptdist, twin):
     for r in ["sighail", "sigwind", "hailone", "wind", "torn"]:
         rh = f"{r}_rptdist_{twin}hr"
         # Convert severe report distance to boolean (0-rptdist = True)
-        df[rh] = (df[rh] >= 0) & (df[rh] < rptdist)
+        df[rh] = (df[rh] >= 0) & (df[rh] < rptdist) # TODO: test speed with .loc[:,rh]. it seemed slower.
         rptcols.append(rh)
 
     # Any report
@@ -231,6 +231,10 @@ def get_features(args, subset=None):
                     "DNN_1_QLCS_nprob", "DNN_1_Disorganized_prob", "DNN_1_Disorganized", "DNN_1_Disorganized_nprob"])
         elif args.suite == "with_CNN_DNN_storm_mode_nprob":
             features.extend(["CNN_1_Supercell_nprob", "CNN_1_QLCS_nprob", "CNN_1_Disorganized_nprob", "DNN_1_Supercell_nprob", "DNN_1_QLCS_nprob", "DNN_1_Disorganized_nprob"])
+        elif args.suite == "simple_with_CNN_storm_mode_nprob":
+            features = ["forecast_hour", "UP_HELI_MAX-N3T3", "SHR01-N3T3", "SBCAPE", "SHR06-N3T3", "WSPD10MAX-N3T3", "CNN_1_Supercell_nprob", "CNN_1_QLCS_nprob", "CNN_1_Disorganized_nprob"]
+        elif args.suite == "simple_without_CNN_storm_mode_nprob":
+            features = ["forecast_hour", "UP_HELI_MAX-N3T3", "SHR01-N3T3", "SBCAPE", "SHR06-N3T3", "WSPD10MAX-N3T3"]
         
         features.extend(["dayofyear_sin", "dayofyear_cos", "Local_Solar_Hour_sin", "Local_Solar_Hour_cos"])
         
