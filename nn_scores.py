@@ -143,7 +143,6 @@ def main():
         df_all = df_all[df_all.mem == "ensmean.all"].set_index("nn")
         df_all = df_all.sort_values(variable,ascending=False)
         print(df_all[["mask","bss","base rate","auc","aps"]])
-        pdb.set_trace()
 
 if __name__ == "__main__":
     main()
