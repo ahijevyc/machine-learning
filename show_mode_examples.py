@@ -1,0 +1,1 @@
+/glade/u/home/ahijevyc/bin/show_mode_examples.py
