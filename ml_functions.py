@@ -231,6 +231,8 @@ def get_features(args, subset=None):
                     "DNN_1_QLCS_nprob", "DNN_1_Disorganized_prob", "DNN_1_Disorganized", "DNN_1_Disorganized_nprob"])
         elif args.suite == "with_CNN_DNN_storm_mode_nprob":
             features.extend(["CNN_1_Supercell_nprob", "CNN_1_QLCS_nprob", "CNN_1_Disorganized_nprob", "DNN_1_Supercell_nprob", "DNN_1_QLCS_nprob", "DNN_1_Disorganized_nprob"])
+        elif args.suite == "with_CNN_DNN_storm_mode_prob":
+            features.extend(["CNN_1_Supercell_prob", "CNN_1_QLCS_prob", "CNN_1_Disorganized_prob", "DNN_1_Supercell_prob", "DNN_1_QLCS_prob", "DNN_1_Disorganized_prob"])
         elif args.suite == "simple_with_CNN_storm_mode_nprob":
             features = ["forecast_hour", "UP_HELI_MAX-N3T3", "SHR01-N3T3", "SBCAPE", "SHR06-N3T3", "WSPD10MAX-N3T3", "CNN_1_Supercell_nprob", "CNN_1_QLCS_nprob", "CNN_1_Disorganized_nprob"]
         elif args.suite == "simple_without_CNN_storm_mode_nprob":
