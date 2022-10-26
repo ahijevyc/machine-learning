@@ -81,7 +81,9 @@ else:
     savedmodel = savedmodel_default(args, fhr_str='f01-f48')
 logging.info(f"savedmodel={savedmodel}")
 
-
+if kfold:
+    logging.info(f"Make train_test_split_time ineffective if KFold was used. KFold will do the splitting.")
+    train_test_split_time = pd.to_datetime("19010101")
 for ifold in range(kfold):
     for i in range(0, nfit):
         savedmodel_i = f"nn/nn_{savedmodel}_{i}/{kfold}fold{ifold}"
@@ -113,9 +115,9 @@ logging.info(f"output file will be {ofile}")
 
 logging.info(f"Read {model} predictors")
 if model == "HRRR":
-    ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.noN7.par'
+    ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.par'
     if debug:
-        ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.noN7.fastdebug.par'
+        ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.fastdebug.par'
     scalingfile = "/glade/work/ahijevyc/NSC_objects/HRRR/scaling_values_all_HRRRX.pk"
     nfhr = 48
 elif model == "NSC3km-12sec":
