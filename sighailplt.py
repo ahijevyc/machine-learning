@@ -2,7 +2,6 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import argparse
-import atcf
 import cartopy
 from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 import datetime
@@ -49,7 +48,7 @@ if debug:
 
 logging.debug(args)
 
-all_storm_reports = spc.get_storm_reports(start=datetime.datetime(2019,10,2, tzinfo=pytz.UTC), end=datetime.datetime(2020,12,2,tzinfo=pytz.UTC), debug=debug, event_types=["hail"])
+all_storm_reports = spc.get_storm_reports(start=datetime.datetime(2019,10,2, tzinfo=pytz.UTC), end=datetime.datetime(2020,12,2,tzinfo=pytz.UTC), event_types=["hail"])
 logging.info(f"found {len(all_storm_reports)} storm reports")
 rs_storm_reports = spc.RyanSobash(start=datetime.datetime(2019,10,2, tzinfo=pytz.UTC), end=datetime.datetime(2020,12,2,tzinfo=pytz.UTC), event_type="hail")
 logging.info(f"Ryan Sobash found {len(rs_storm_reports)} storm reports")
@@ -61,7 +60,7 @@ logging.info("cartopy view for debugging...")
 fig = plt.figure()
 axc = plt.axes(projection=cartopy.crs.LambertConformal())
 axc.set_extent(extent, crs=cartopy.crs.PlateCarree()) 
-legend_items = spc.plot(storm_reports, axc, drawrange=0, colorbyfreq=True, debug=debug)
+legend_items = spc.plot(storm_reports, axc, drawrange=0, colorbyfreq=True)
 axc.legend(handles=legend_items.values(), fontsize='xx-small')
 
 # *must* call draw in order to get the axis boundary used to add ticks:

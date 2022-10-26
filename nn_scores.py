@@ -64,11 +64,11 @@ def main():
         line_kw = dict(units="mem", estimator=None)
     else:
         # If ci is not zero plot ci% confidence interval
-        line_kw = dict(ci=ci)
+        line_kw = dict(errorbar=('ci',95))
 
     line_kw.update(dict(hue="nn", style="nn"))
 
-    logging.info(f"Read {len(ifiles)} input files into Pandas DataFrame, with nn column = filename")
+    logging.info(f"Read {len(ifiles)} input files into Pandas DataFrame, with new nn column equal to input filename")
     dfs = pd.concat([pd.read_csv(ifile,header=0).assign(nn=nns(ifile.name)) for ifile in ifiles], ignore_index=True) # ignore index or get duplicate indices
 
     # If DataFrame has a "mask" column, use it to signify linewidth.
@@ -120,7 +120,7 @@ def main():
             if variable == "bss":
                 ylim = (-0.03,0.35)
                 if cl == "flashes": ylim = (0,0.75)
-                if cl.startswith("torn") or cl.startswith("sig"): ylim = (-0.03, 0.1)
+                if cl.startswith("torn") or cl.startswith("sig"): ylim = (-0.03, 0.12)
                 if cl.startswith("hailone"): ylim = (-0.02, 0.18)
                 topax.set_ylim(ylim)
 
@@ -132,7 +132,7 @@ def main():
             handles, labels = topax.get_legend_handles_labels()
             if len(handles) > 8:
                 topax.legend(handles, labels, ncol=2, fontsize=7, labelspacing=0.45, columnspacing=1, title=prefix,
-                        handlelength=3, title_fontsize=8) #default handlelength=2 
+                        handlelength=3, title_fontsize=8) #default handlelength=2. to see entire cycle of long patterns
             ofile = f"{os.path.join(os.path.dirname(prefix),cl+os.path.basename(prefix))}.png"
             plt.tight_layout()
             fig.savefig(ofile)
@@ -142,7 +142,10 @@ def main():
         # Look at the aggregrate scores for "all" forecast hours. Not what was plotted.
         df_all = df_all[df_all.mem == "ensmean.all"].set_index("nn")
         df_all = df_all.sort_values(variable,ascending=False)
-        print(df_all[["mask","bss","base rate","auc","aps"]])
+        if "mask" in dfs:
+            print(df_all[["mask","bss","base rate","auc","aps"]])
+        else:
+            print(df_all[["bss","base rate","auc","aps"]])
 
 if __name__ == "__main__":
     main()

@@ -169,11 +169,9 @@ def main():
 
     logging.info(f"Read {model} predictors. Use parquet file, if it exists. If it doesn't exist, create it.")
     if model == "HRRR":
-        alsoHRRRv4 = False
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.par'
-        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.noN7.par'
-        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.noN7.fastdebug.par'
-        if alsoHRRRv4: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.noN7.par'
+        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.par'
+        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.fastdebug.par'
         scalingfile = f"/glade/work/ahijevyc/NSC_objects/{model}/scaling_values_all_HRRRX.pk"
     elif model == "NSC3km-12sec":
         ifile = f'{model}.par'
@@ -187,11 +185,10 @@ def main():
         if model == "HRRR":
             search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRRX_d01_20*00-0000.par' # just 00z 
             if debug:
-                search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRRX_d01_2020060*00-0000.par' # just 00z 
+                search_str = search_str.replace("*", "2006*") # just June 2020
             ifiles = glob.glob(search_str)
-            if alsoHRRRv4:
-                search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202[01]*00-0000.par' # HRRR, not HRRRX. no 2022 (yet) 
-                ifiles.extend(glob.glob(search_str))
+            search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202*00-0000.par' # append HRRR to HRRRX.
+            ifiles.extend(glob.glob(search_str))
         elif model == "NSC3km-12sec":
             search_str = f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_20*00-0000.par'
             ifiles = glob.glob(search_str)
@@ -212,6 +209,7 @@ def main():
         logging.info(f"convert df Date to datetime64[ns]")
         df["Date"] = df.Date.astype('datetime64[ns]')
         df = df.rename(columns=dict(yind="y",xind="x",Date="initialization_time",fhr="forecast_hour"))
+        logging.info(f"derive valid_time from initialization_time + forecast_hour")
         df["valid_time"] = pd.to_datetime(df["initialization_time"]) + df["forecast_hour"].astype(int) * datetime.timedelta(hours=1)
         df = df.set_index(["y","x","initialization_time","forecast_hour"])
 
