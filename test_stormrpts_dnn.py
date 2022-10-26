@@ -81,7 +81,7 @@ else:
     savedmodel = savedmodel_default(args, fhr_str='f01-f48')
 logging.info(f"savedmodel={savedmodel}")
 
-if kfold:
+if kfold > 1:
     logging.info(f"Make train_test_split_time ineffective if KFold was used. KFold will do the splitting.")
     train_test_split_time = pd.to_datetime("19010101")
 for ifold in range(kfold):
