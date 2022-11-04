@@ -36,6 +36,18 @@ def brier_skill_score(obs, preds):
     return bss
 
 
+def configs_match(ylargs, args):
+    for key in ["batchnorm", "batchsize", "debug", "dropout", "epochs", "flash", "glm", "kfold", "layers", "learning_rate", "model", "neurons",
+                "optimizer", "reg_penalty", "rptdist", "splittime", "suite", "twin"]:
+        if key == "debug" and debug:
+            continue  # if running in debug mode, don't require debug in yaml file to match
+        assert getattr(ylargs, key) == getattr(
+            args, key), f'this script {key} {getattr(args,key)} does not match yaml {key} {getattr(ylargs,key)}'
+
+    return True
+
+
+
 def get_argparser():
     parser = argparse.ArgumentParser(description = "train/test dense neural network", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--batchnorm', action='store_true', help="use batch normalization")

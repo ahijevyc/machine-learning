@@ -14,7 +14,7 @@ from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, get_argparser, get_features, get_glm, rptdist2bool, savedmodel_default
+from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, get_glm, rptdist2bool, savedmodel_default
 import multiprocessing
 import numpy as np
 import os
@@ -39,22 +39,6 @@ import yaml
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 
-def configs_match(ylargs, args):
-    if args.kfold > 1:
-        # once I started KFold. Training and testing cases are all before train_test_split_time with KFold.
-        pass
-    else:
-        assert ylargs.splittime == args.splittime, f"yaml train_test_split_time {ylargs.splittime} does not match value from this script {args.splittime}"
-    for key in ["batchnorm", "batchsize", "debug", "dropout", "epochs", "flash", "glm", "kfold", "layers", "learning_rate", "model", "neurons",
-                "optimizer", "reg_penalty", "rptdist", "suite", "twin"]:
-        if key == "debug" and debug:
-            continue  # if running in debug mode, don't require debug in yaml file to match
-        assert getattr(ylargs, key) == getattr(
-            args, key), f'this script {key} {getattr(args,key)} does not match yaml {key} {getattr(ylargs,key)}'
-
-    return True
-
-
 parser = get_argparser()
 parser.add_argument('--ifile', type=argparse.FileType("r"), 
                     help="parquet input file")
@@ -76,7 +60,7 @@ debug = args.debug
 field = args.field
 flash = args.flash
 glm = args.glm
-ifile = args.ifile.name
+ifile = args.ifile.name if args.ifile else None
 kfold = args.kfold
 model = args.model
 nfit = args.nfits
@@ -101,7 +85,6 @@ else:
     savedmodel = savedmodel_default(args, fhr_str='f01-f48')
 logging.info(f"savedmodel={savedmodel}")
 
-
 for ifold in range(kfold):
     for i in range(0, nfit):
         savedmodel_i = f"nn/nn_{savedmodel}_{i}/{kfold}fold{ifold}"
@@ -119,15 +102,6 @@ if glm:
 if not os.path.exists(odir):
     logging.info(f"making directory {odir}")
     os.mkdir(odir)
-
-ofile = os.path.realpath(
-    f"nn/nn_{savedmodel}.{kfold}fold.{field}{thresh}.scores.txt")
-if not clobber and os.path.exists(ofile):
-    logging.info(
-        f"Exiting because output file {ofile} exists. Use --clobber option to override.")
-    sys.exit(0)
-
-logging.info(f"output file will be {ofile}")
 
 ##################################
 
@@ -225,6 +199,18 @@ df = df.loc[:, :, :, train_test_split_time:]
 logging.info(
     f"keep {len(df)}/{before_filtering} cases with init times at or later than {train_test_split_time}")
 
+itimes = df.index.get_level_values(level="initialization_time")
+teststart = itimes.min()
+testend = itimes.max()
+ofile = os.path.realpath(
+    f"nn/nn_{savedmodel}.{kfold}fold.{field}{thresh}.scores{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.txt")
+if not clobber and os.path.exists(ofile):
+    logging.info(
+        f"Exiting because output file {ofile} exists. Use --clobber option to override.")
+    sys.exit(0)
+
+logging.info(f"output file will be {ofile}")
+
 logging.info("Define mask and append to index")
 
 mask = pd.Series(np.select([df[(field,"feature")] >= thresh], [f"{field}>={thresh*100}%"], f"{field}<{thresh*100}%"), name="mask") # Mask is a string like DNN_1_Supercell>=10%
@@ -255,7 +241,7 @@ if "fhr" in sv:
     sv = sv.rename(columns={"fhr": "forecast_hour"})
 
 # You might have scaling factors for columns that you dropped already, like -N7 columns.
-extra_sv_columns = set(sv.columns) - set(df.columns.get_level_values(level=0))
+extra_sv_columns = set(sv.columns) - set(df.columns.get_level_values(level=0)) # don't think level 0 has a name
 if extra_sv_columns:
     logging.info(
         f"dropping {len(extra_sv_columns)} extra scaling factor columns {extra_sv_columns}")
@@ -411,7 +397,7 @@ def statjob(fhr, statcurves=None):
                          ' '.join(features.columns),
                          wrap=True,
                          fontsize=5)
-                ofile = f"nn/{thissavedmodel}.{rpt_type}.{mask}.statcurves.png"
+                ofile = f"nn/{thissavedmodel}.{rpt_type}.{mask}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.png"
                 fig.savefig(ofile)
                 logging.info(os.path.realpath(ofile))
                 plt.clf()
@@ -419,7 +405,7 @@ def statjob(fhr, statcurves=None):
 
 
 if debug:
-    stattxt = statjob('all', statcurves=True)
+    stattxt = statjob('all')
     pdb.set_trace()
     sys.exit(0)
 

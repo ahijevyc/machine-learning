@@ -5,7 +5,7 @@ from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, get_argparser, get_features, get_glm, rptdist2bool, savedmodel_default
+from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, get_glm, rptdist2bool, savedmodel_default
 import multiprocessing
 import numpy as np
 import os
@@ -28,22 +28,6 @@ import yaml
 
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
-
-
-def configs_match(ylargs, args):
-    if args.kfold > 1:
-        # once I started KFold. Training and testing cases are all before train_test_split_time with KFold.
-        pass
-    else:
-        assert ylargs.splittime == args.splittime, f"yaml train_test_split_time {ylargs.splittime} does not match value from this script {args.splittime}"
-    for key in ["batchnorm", "batchsize", "debug", "dropout", "epochs", "flash", "glm", "kfold", "layers", "learning_rate", "model", "neurons",
-                "optimizer", "reg_penalty", "rptdist", "suite", "twin"]:
-        if key == "debug" and debug:
-            continue  # if running in debug mode, don't require debug in yaml file to match
-        assert getattr(ylargs, key) == getattr(
-            args, key), f'this script {key} {getattr(args,key)} does not match yaml {key} {getattr(ylargs,key)}'
-
-    return True
 
 
 parser = get_argparser()
@@ -101,15 +85,6 @@ if glm:
 if not os.path.exists(odir):
     logging.info(f"making directory {odir}")
     os.mkdir(odir)
-
-ofile = os.path.realpath(
-    f"nn/nn_{savedmodel}.{kfold}fold.scores.txt")
-if not clobber and os.path.exists(ofile):
-    logging.info(
-        f"Exiting because output file {ofile} exists. Use --clobber option to override.")
-    sys.exit(0)
-
-logging.info(f"output file will be {ofile}")
 
 ##################################
 
@@ -196,6 +171,18 @@ before_filtering = len(df)
 df = df.loc[:, :, :, train_test_split_time:]
 logging.info(
     f"keep {len(df)}/{before_filtering} cases with init times at or later than {train_test_split_time}")
+
+itimes = df.index.get_level_values(level="initialization_time")
+teststart = itimes.min()
+testend = itimes.max()
+ofile = os.path.realpath(
+        f"nn/nn_{savedmodel}.{kfold}fold.scores{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.txt")
+if not clobber and os.path.exists(ofile):
+    logging.info(
+        f"Exiting because output file {ofile} exists. Use --clobber option to override.")
+    sys.exit(0)
+
+logging.info(f"output file will be {ofile}")
 
 
 logging.info(f"Split {len(rptcols)} labels away from predictors")
@@ -372,7 +359,7 @@ def statjob(fhr, statcurves=None):
                            fill=False, plabel=False)
             fig.suptitle(f"{suite} {rpt_type}")
             fig.text(0.5, 0.01, ' '.join(df.columns), wrap=True, fontsize=5)
-            ofile = f"nn/{thissavedmodel}.{rpt_type}.statcurves.png"
+            ofile = f"nn/{thissavedmodel}.{rpt_type}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.png"
             fig.savefig(ofile)
             logging.info(os.path.realpath(ofile))
             plt.clf()
@@ -380,7 +367,7 @@ def statjob(fhr, statcurves=None):
 
 
 if debug:
-    stattxt = statjob('all', statcurves=True)
+    stattxt = statjob('all')
     pdb.set_trace()
     sys.exit(0)
 

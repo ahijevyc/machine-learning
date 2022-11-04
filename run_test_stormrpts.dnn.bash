@@ -9,7 +9,7 @@ fi
 
 i=0 # number each line of command file
 ncpus=8
-mem=120GB
+mem=130GB
 walltime=3:00:00
 
 # Loop through commands file one line at a time
