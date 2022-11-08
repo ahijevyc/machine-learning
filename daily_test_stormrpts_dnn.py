@@ -5,7 +5,7 @@ from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, get_argparser, get_features, get_glm, rptdist2bool, savedmodel_default
+from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, get_glm, rptdist2bool, savedmodel_default
 import multiprocessing
 import numpy as np
 import os
@@ -28,21 +28,6 @@ import yaml
 
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
-
-def configs_match(ylargs, args):
-    if args.kfold > 1:
-        # once I started KFold. Training and testing cases are all before train_test_split_time with KFold.
-        pass
-    else:
-        assert ylargs.splittime == args.splittime, f"yaml train_test_split_time {ylargs.splittime} does not match value from this script {args.splittime}"
-    for key in ["batchnorm", "batchsize", "debug", "dropout", "epochs", "flash", "glm", "kfold", "layers", "learning_rate", "model", "neurons",
-                "optimizer", "reg_penalty", "rptdist", "suite", "twin"]:
-        if key == "debug" and debug:
-            continue  # if running in debug mode, don't require debug in yaml file to match
-        assert getattr(ylargs, key) == getattr(
-            args, key), f'this script {key} {getattr(args,key)} does not match yaml {key} {getattr(ylargs,key)}'
-
-    return True
 
 
 parser = get_argparser()
