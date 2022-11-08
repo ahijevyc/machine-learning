@@ -64,7 +64,7 @@ args: !!python/object:argparse.Namespace
   nfits: 10
   rptdist: 40
   savedmodel: null
-  splittime: !!python/object/apply:pandas._libs.tslibs.timestamps._unpickle_timestamp
+  teststart: !!python/object/apply:pandas._libs.tslibs.timestamps._unpickle_timestamp
   - 1467331200000000000
   - null
   - null

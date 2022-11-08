@@ -28,7 +28,7 @@ usage: train_stormrpts_dnn.py [-h] [--batchnorm] [--batchsize BATCHSIZE]
                               [--optimizer {adam,sgd}]
                               [--reg_penalty REG_PENALTY] [--rptdist RPTDIST]
                               [--savedmodel SAVEDMODEL]
-                              [--splittime SPLITTIME] [--suite SUITE]
+                              [--teststart TESTSTART] [--suite SUITE]
                               [--twin TWIN] [--fhr FHR [FHR ...]]
                               [--fits FITS [FITS ...]]
                               [--folds FOLDS [FOLDS ...]] [--seed SEED]
@@ -65,7 +65,7 @@ optional arguments:
   --rptdist RPTDIST     severe weather report max distance (default: 40)
   --savedmodel SAVEDMODEL
                         filename of machine learning model (default: None)
-  --splittime SPLITTIME
+  --teststart TESTSTART
                         train with storms before this time; test this time and
                         after (default: 202012021200)
   --suite SUITE         name for suite of training features (default: default)
@@ -97,7 +97,7 @@ usage: test_stormrpts_dnn.py [-h] [--batchnorm] [--batchsize BATCHSIZE]
                              [--neurons NEURONS [NEURONS ...]]
                              [--optimizer {adam,sgd}]
                              [--reg_penalty REG_PENALTY] [--rptdist RPTDIST]
-                             [--savedmodel SAVEDMODEL] [--splittime SPLITTIME]
+                             [--savedmodel SAVEDMODEL] [--teststart TESTSTART]
                              [--suite SUITE] [--twin TWIN] [--ifile IFILE]
                              [--nprocs NPROCS]
 
@@ -133,7 +133,7 @@ optional arguments:
   --rptdist RPTDIST     severe weather report max distance (default: 40)
   --savedmodel SAVEDMODEL
                         filename of machine learning model (default: None)
-  --splittime SPLITTIME
+  --teststart TESTSTART
                         train with storms before this time; test this time and
                         after (default: 202012021200)
   --suite SUITE         name for suite of training features (default: default)
