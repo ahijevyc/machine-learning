@@ -38,7 +38,7 @@ def brier_skill_score(obs, preds):
 
 def configs_match(ylargs, args):
     for key in ["batchnorm", "batchsize", "debug", "dropout", "epochs", "flash", "glm", "kfold", "layers", "learning_rate", "model", "neurons",
-                "optimizer", "reg_penalty", "rptdist", "splittime", "suite", "twin"]:
+                "optimizer", "reg_penalty", "rptdist", "teststart", "suite", "twin"]:
         if key == "debug" and debug:
             continue  # if running in debug mode, don't require debug in yaml file to match
         assert getattr(ylargs, key) == getattr(
@@ -68,7 +68,7 @@ def get_argparser():
     parser.add_argument('--reg_penalty', type=float, default=0.01, help="L2 regularization factor")
     parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
     parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
-    parser.add_argument('--splittime', type=lambda s: pd.to_datetime(s), default="202012021200", help="train with storms before this time; test this time and after")
+    parser.add_argument('--teststart', type=lambda s: pd.to_datetime(s), default="202012021200", help="train with storms before this time; test this time and after")
     parser.add_argument('--suite', type=str, default='default', help="name for suite of training features")
     parser.add_argument('--twin', type=int, default=2, help="time window in hours")
     return parser

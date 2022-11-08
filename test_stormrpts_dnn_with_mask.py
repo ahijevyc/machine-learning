@@ -50,7 +50,7 @@ parser.add_argument('thresh', type=float,
                     help="field threshold (less than this / greater than or equal to this)")
 
 
-#args = parser.parse_args(args="DNN_1_Supercell_nprob 0.05 --neurons 1024 --nprocs 5 --layers 1 --optimizer sgd --learning_rate 0.01 --dropout 0 --epochs 10 --model NSC3km-12sec --splittime 20160701 --kfold 1 --suite default".split())
+#args = parser.parse_args(args="DNN_1_Supercell_nprob 0.05 --neurons 1024 --nprocs 5 --layers 1 --optimizer sgd --learning_rate 0.01 --dropout 0 --epochs 10 --model NSC3km-12sec --teststart 20160701 --kfold 1 --suite default".split())
 args = parser.parse_args()
 logging.info(args)
 
@@ -68,7 +68,7 @@ nprocs = args.nprocs
 rptdist = args.rptdist
 savedmodel = args.savedmodel
 thresh = args.thresh
-train_test_split_time = args.splittime
+train_test_split_time = args.teststart
 suite = args.suite
 twin = args.twin
 

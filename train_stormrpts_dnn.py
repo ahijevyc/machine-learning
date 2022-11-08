@@ -128,7 +128,7 @@ def main():
     rptdist               = args.rptdist
     savedmodel            = args.savedmodel
     seed                  = args.seed
-    train_test_split_time = args.splittime
+    train_test_split_time = args.teststart
     suite                 = args.suite
     twin                  = args.twin
 

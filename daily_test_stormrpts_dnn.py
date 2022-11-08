@@ -48,7 +48,7 @@ nfit                  = args.nfits
 nprocs                = args.nprocs
 rptdist               = args.rptdist
 savedmodel            = args.savedmodel
-train_test_split_time = args.splittime
+train_test_split_time = args.teststart
 suite                 = args.suite
 twin                  = args.twin
 
