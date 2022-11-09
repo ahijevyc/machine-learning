@@ -129,7 +129,7 @@ def main():
     savedmodel            = args.model_fname
     num_neurons           = args.neurons
     segmentations         = args.segmentations
-    train_test_split_time = args.split
+    teststart             = args.split
     suite                 = args.suite
 
     print(args)
@@ -177,13 +177,13 @@ def main():
     elif labelpick == "all":
         pass
 
-    # Split labels into training and testing sets (training < train_test_split_time <= testing).
-    train_indices = df["Valid_Date"] < train_test_split_time
+    # Split labels into training and testing sets (training < teststart <= testing).
+    train_indices = df["Valid_Date"] < teststart
     test_indices = ~train_indices
     df["split"] = "train"
     df.loc[test_indices,"split"] = "test"
-    print(f"{train_indices.sum()} ({100.*train_indices.sum()/len(df):.0f}%) training cases < {train_test_split_time}")
-    print(f"{test_indices.sum()} ({100.*test_indices.sum()/len(df):.0f}%) test cases >= {train_test_split_time}")
+    print(f"{train_indices.sum()} ({100.*train_indices.sum()/len(df):.0f}%) training cases < {teststart}")
+    print(f"{test_indices.sum()} ({100.*test_indices.sum()/len(df):.0f}%) test cases >= {teststart}")
 
     labels = df['label'].astype("category")
     labels = labels.cat.reorder_categories(["Q1", "Q2", "S1", "S2", "S3", "D1", "D2"], ordered=True)

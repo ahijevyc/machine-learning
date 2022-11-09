@@ -28,7 +28,7 @@ model                 = args.model
 nfit                  = args.nfits
 rptdist               = args.rptdist
 savedmodel            = args.savedmodel
-train_test_split_time = args.teststart
+teststart             = args.teststart
 twin                  = args.twin
 
 
@@ -69,7 +69,7 @@ if model == "HRRR":
     nfhr = 48
 elif model == "NSC3km-12sec":
     ifile0 = f'{model}.par'
-    scalingfile = f"scaling_values_{model}_{train_test_split_time:%Y%m%d_%H%M}.pk"
+    scalingfile = f"scaling_values_{model}_{teststart:%Y%m%d_%H%M}.pk"
     nfhr = 36
 
 

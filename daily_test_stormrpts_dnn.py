@@ -38,19 +38,19 @@ args = parser.parse_args()
 logging.info(args)
 
 # Assign arguments to simple-named variables
-clobber               = args.clobber
-debug                 = args.debug
-flash                 = args.flash
-glm                   = args.glm
-kfold                 = args.kfold
-model                 = args.model
-nfit                  = args.nfits
-nprocs                = args.nprocs
-rptdist               = args.rptdist
-savedmodel            = args.savedmodel
-train_test_split_time = args.teststart
-suite                 = args.suite
-twin                  = args.twin
+clobber     = args.clobber
+debug       = args.debug
+flash       = args.flash
+glm         = args.glm
+kfold       = args.kfold
+model       = args.model
+nfit        = args.nfits
+nprocs      = args.nprocs
+rptdist     = args.rptdist
+savedmodel  = args.savedmodel
+teststart   = args.teststart
+suite       = args.suite
+twin        = args.twin
 
 
 if debug:
@@ -103,7 +103,7 @@ elif model == "NSC3km-12sec":
     ifile0 = f'{model}.par'
     if debug:
         ifile0 = f'/glade/work/ahijevyc/NSC_objects/fastdebug.par'
-    scalingfile = f"scaling_values_{model}_{train_test_split_time:%Y%m%d_%H%M}.pk"
+    scalingfile = f"scaling_values_{model}_{teststart:%Y%m%d_%H%M}.pk"
     nfhr = 36
 
 
@@ -162,10 +162,10 @@ df = df.sort_index(level="valid_time") # Can't ignore_index=True like train_stor
 
 
 
-logging.info(f"Drop initialization times at or after {train_test_split_time}")
+logging.info(f"Drop initialization times at or after {teststart}")
 before_filtering  = len(df)
-df = df.loc[:,:,:,train_test_split_time:]
-logging.info(f"keep {len(df)}/{before_filtering} cases with init times at or later than {train_test_split_time}")
+df = df.loc[:,:,:,teststart:]
+logging.info(f"keep {len(df)}/{before_filtering} cases with init times at or later than {teststart}")
 
 
 logging.info(f"Split {len(rptcols)} labels away from predictors")
@@ -202,7 +202,7 @@ if kfold > 1:
     cvsplit = cv.split(df)
 else:
     # Emulate a 1-split KFold object.
-    # Put all cases in test split. They are already after train_test_split_time.
+    # Put all cases in test split. They are already after teststart.
     cvsplit = [([], np.arange(len(df)))]
 
 def statjob(fhr,statcurves=None):

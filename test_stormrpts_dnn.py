@@ -51,7 +51,8 @@ nfit = args.nfits
 nprocs = args.nprocs
 rptdist = args.rptdist
 savedmodel = args.savedmodel
-train_test_split_time = args.teststart
+testend = args.testend
+teststart = args.teststart
 suite = args.suite
 twin = args.twin
 
@@ -101,7 +102,7 @@ elif model == "NSC3km-12sec":
     ifile = f'{model}.par'
     if debug:
         ifile = f'/glade/work/ahijevyc/NSC_objects/fastdebug.par'
-    scalingfile = f"/glade/work/ahijevyc/NSC_objects/scaling_values_{model}_{train_test_split_time:%Y%m%d_%H%M}.pk"
+    scalingfile = f"/glade/work/ahijevyc/NSC_objects/scaling_values_{model}_{teststart:%Y%m%d_%H%M}.pk"
     nfhr = 36
 
 
@@ -166,11 +167,11 @@ logging.info(f"Sort by valid_time")
 df = df.sort_index(level="valid_time")
 
 
-logging.info(f"Drop initialization times before {train_test_split_time}")
+logging.info(f"Use initialization times {teststart}-{testend} for testing")
 before_filtering = len(df)
-df = df.loc[:, :, :, train_test_split_time:]
+df = df.loc[:, :, :, teststart:testend]
 logging.info(
-    f"keep {len(df)}/{before_filtering} cases with init times at or later than {train_test_split_time}")
+    f"keep {len(df)}/{before_filtering} cases for testing")
 
 itimes = df.index.get_level_values(level="initialization_time")
 teststart = itimes.min()

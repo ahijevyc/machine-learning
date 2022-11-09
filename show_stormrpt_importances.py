@@ -109,15 +109,15 @@ def main():
     model = "NSC3km-12sec"
     suite = "with_storm_mode"
     glmstr=""
-    train_test_split_time = pd.to_datetime("20160701")
+    teststart = pd.to_datetime("20160701")
     figh=14
     ifile0 = f'{model}{glmstr}.par'
-    scalingfile = f"scaling_values_{model}_{train_test_split_time:%Y%m%d_%H%M}.pk"
+    scalingfile = f"scaling_values_{model}_{teststart:%Y%m%d_%H%M}.pk"
     logging.info(f"read parquet {ifile0}")
     df = pd.read_parquet(ifile0, engine="pyarrow")
 
     # split into train and test.
-    train_idx = df["initialization_time"] < train_test_split_time
+    train_idx = df["initialization_time"] < teststart
 
     rptdist = 40
     twin = 2

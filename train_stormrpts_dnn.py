@@ -106,31 +106,31 @@ def main():
     logging.info(args)
 
     # Assign arguments to simple-named variables
-    batchnorm             = args.batchnorm 
-    batchsize             = args.batchsize
-    clobber               = args.clobber
-    debug                 = args.debug
-    dropout               = args.dropout
-    epochs                = args.epochs
-    flash                 = args.flash
-    fhr                   = args.fhr
-    fits                  = args.fits
-    folds                 = args.folds
-    nfit                  = args.nfits
-    glm                   = args.glm
-    kfold                 = args.kfold
-    layer                 = args.layers
-    learning_rate         = args.learning_rate
-    reg_penalty           = args.reg_penalty
-    model                 = args.model
-    neurons               = args.neurons
-    optimizer             = args.optimizer
-    rptdist               = args.rptdist
-    savedmodel            = args.savedmodel
-    seed                  = args.seed
-    train_test_split_time = args.teststart
-    suite                 = args.suite
-    twin                  = args.twin
+    batchnorm      = args.batchnorm 
+    batchsize      = args.batchsize
+    clobber        = args.clobber
+    debug          = args.debug
+    dropout        = args.dropout
+    epochs         = args.epochs
+    flash          = args.flash
+    fhr            = args.fhr
+    fits           = args.fits
+    folds          = args.folds
+    nfit           = args.nfits
+    glm            = args.glm
+    kfold          = args.kfold
+    layer          = args.layers
+    learning_rate  = args.learning_rate
+    reg_penalty    = args.reg_penalty
+    model          = args.model
+    neurons        = args.neurons
+    optimizer      = args.optimizer
+    rptdist        = args.rptdist
+    savedmodel     = args.savedmodel
+    seed           = args.seed
+    teststart      = args.teststart
+    suite          = args.suite
+    twin           = args.twin
 
 
     if debug:
@@ -175,7 +175,7 @@ def main():
         scalingfile = f"/glade/work/ahijevyc/NSC_objects/{model}/scaling_values_all_HRRRX.pk"
     elif model == "NSC3km-12sec":
         ifile = f'{model}.par'
-        scalingfile = f"scaling_values_{model}_{train_test_split_time:%Y%m%d_%H%M}.pk"
+        scalingfile = f"scaling_values_{model}_{teststart:%Y%m%d_%H%M}.pk"
 
     if os.path.exists(ifile):
         logging.info(f'reading {ifile}')
@@ -293,12 +293,12 @@ def main():
 
 
     # HRRRv3 to v4 at 20201202 0z.
-    logging.info(f"Drop initialization times at or after {train_test_split_time}")
+    logging.info(f"Drop initialization times at or after {teststart}")
     before_filtering = len(df)
-    train_idx  = df.initialization_time.astype('datetime64[ns]') < train_test_split_time 
+    train_idx  = df.initialization_time.astype('datetime64[ns]') < teststart 
     df = df.drop(columns="initialization_time")
     df = df[train_idx]
-    logging.info(f"keep {len(df)}/{before_filtering} cases with init times earlier than {train_test_split_time}")
+    logging.info(f"keep {len(df)}/{before_filtering} cases with init times earlier than {teststart}")
 
 
     logging.info(f"Split {len(rptcols)} labels away from predictors")
