@@ -26,7 +26,7 @@ def parse_args():
     parser.add_argument("--ensmean", action="store_true", help="ensemble mean")
     parser.add_argument("--mask", type=str, nargs="+", help="only show this(these) mask value(s)")
     parser.add_argument("--nofineprint", action="store_true", help="no fine print (ci, time created, etc)")
-    parser.add_argument("--nomem", action="store_true", help="no members")
+    parser.add_argument("--nomembers", action="store_true", help="no members")
     parser.add_argument("--noplot", action="store_true", help="no plot, just print all-forecast hour means)")
     parser.add_argument("-v","--variable", type=str, default="bss", help="variable to plot")
     parser.add_argument("--ymax",type=float, help="maximum on y-axis")
@@ -43,7 +43,7 @@ def main():
     ensmean     = args.ensmean
     mask        = args.mask
     nofineprint = args.nofineprint
-    nomem       = args.nomem
+    nomem       = args.nomembers
     noplot      = args.noplot
     variable    = args.variable
     ymax        = args.ymax
@@ -133,6 +133,8 @@ def main():
             if len(handles) > 8:
                 topax.legend(handles, labels, ncol=2, fontsize=7, labelspacing=0.45, columnspacing=1, title=prefix,
                         handlelength=3, title_fontsize=8) #default handlelength=2. to see entire cycle of long patterns
+            else:
+                topax.legend(handles, labels, title=prefix)
             ofile = f"{os.path.join(os.path.dirname(prefix),cl+os.path.basename(prefix))}.png"
             plt.tight_layout()
             fig.savefig(ofile)
@@ -142,10 +144,12 @@ def main():
         # Look at the aggregrate scores for "all" forecast hours. Not what was plotted.
         df_all = df_all[df_all.mem == "ensmean.all"].set_index("nn")
         df_all = df_all.sort_values(variable,ascending=False)
-        if "mask" in dfs:
-            print(df_all[["mask","bss","base rate","auc","aps"]])
-        else:
-            print(df_all[["bss","base rate","auc","aps"]])
+        columns = ["bss","base rate","auc","aps"]
+        columns_added_later = ["mask", "n"]
+        for col in columns_added_later:
+            if col in dfs:
+                columns.append(col)
+        print(df_all[columns])
 
 if __name__ == "__main__":
     main()
