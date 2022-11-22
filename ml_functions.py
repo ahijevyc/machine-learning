@@ -37,8 +37,19 @@ def brier_skill_score(obs, preds):
 
 
 def configs_match(ylargs, args):
+    # Make sure training time range doesn't overlap test range
+    trainstart = getattr(ylargs,"trainstart")
+    trainend   = getattr(ylargs,"trainend")
+    teststart = args.teststart
+    testend   = args.testend
+    overlap = min([trainend, testend]) - max([trainstart, teststart])
+    if overlap >= dt.timedelta(hours=0) and args.kfold == 1:
+        logging.warning(f"training and testing time ranges overlap {trainstart}-{trainend}|{teststart}-{testend}")
+   
+    # Comparing config.yaml training bounds and requested training bounds (args) is not a good test because config.yaml bounds are "actual" training set bounds, which may be 
+    # shorter than the requested bounds. 
     for key in ["batchnorm", "batchsize", "debug", "dropout", "epochs", "flash", "glm", "kfold", "layers", "learning_rate", "model", "neurons",
-                "optimizer", "reg_penalty", "rptdist", "testend", "teststart", "suite", "twin"]:
+                "optimizer", "reg_penalty", "rptdist", "suite", "twin"]:
         assert getattr(ylargs, key) == getattr(
             args, key), f'this script {key} {getattr(args,key)} does not match yaml {key} {getattr(ylargs,key)}'
 
@@ -59,15 +70,17 @@ def get_argparser():
     parser.add_argument('--kfold', type=int, default=5, help="apply kfold cross validation to training set")
     parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="learning rate")
-    parser.add_argument('--model', type=str, choices=["HRRR","NSC3km-12sec"], default="HRRR", help="prediction model")
+    parser.add_argument('--model', type=str, choices=["HRRR","NSC1km","NSC3km-12sec","NSC15km"], default="HRRR", help="prediction model")
     parser.add_argument("--glm", action='store_true', help='Use GLM')
     parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
     parser.add_argument('--optimizer', type=str, choices=['adam','sgd'], default='adam', help="optimizer")
     parser.add_argument('--reg_penalty', type=float, default=0.01, help="L2 regularization factor")
     parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
     parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
-    parser.add_argument('--testend', type=lambda s: pd.to_datetime(s), default="20220101T0000", help="train with storms before this time; test this time and after")
-    parser.add_argument('--teststart', type=lambda s: pd.to_datetime(s), default="20201202T1200", help="train with storms before this time; test this time and after")
+    parser.add_argument('--trainend', type=lambda s: pd.to_datetime(s), help="training set end")
+    parser.add_argument('--trainstart', type=lambda s: pd.to_datetime(s), help="training set start")
+    parser.add_argument('--testend', type=lambda s: pd.to_datetime(s), default="20220101T00", help="testing set end")
+    parser.add_argument('--teststart', type=lambda s: pd.to_datetime(s), default="20201202T12", help="testing set start")
     parser.add_argument('--suite', type=str, default='default', help="name for suite of training features")
     parser.add_argument('--twin', type=int, default=2, help="time window in hours")
     return parser
@@ -85,7 +98,10 @@ def get_optimizer(s, learning_rate = 0.001, **kwargs):
     return o
 
 
-def rptdist2bool(df, rptdist, twin):
+def rptdist2bool(df, args):
+    rptdist = args.rptdist
+    twin = args.twin
+    logging.debug(f"report distance {rptdist}km  time window {twin}h")
     # get rid of columns that are associated with different time window (twin)
     dropcol=[]
     for r in ["sighail", "sigwind", "hailone", "wind", "torn"]:
@@ -106,6 +122,13 @@ def rptdist2bool(df, rptdist, twin):
     hailwindtorn = [f"{r}_rptdist_{twin}hr" for r in ["hailone","wind","torn"]]
     df[any_rpt_col] = df[hailwindtorn].any(axis="columns")
     rptcols.append(any_rpt_col)
+
+    # GLM?
+    if args.glm:
+        logging.debug(f"at least {args.flash} flashes")
+        df["flashes"] = df["flashes"] >= args.flash
+        rptcols.append("flashes")
+
     return df, rptcols
 
 def get_glm(twin,rptdist,date=None):
@@ -121,7 +144,7 @@ def get_glm(twin,rptdist,date=None):
             glm = xarray.open_dataset("/glade/scratch/ahijevyc/temp/GLM_all.nc")
         else:
             glmfiles = sorted(glob.glob("/glade/work/ahijevyc/GLM/2*.glm.nc"))
-            #glmtimes = [datetime.datetime.strptime(os.path.basename(x), "%Y%m%d%H.glm.nc") for x in glmfiles] # why is this here?
+            #glmtimes = [dt.datetime.strptime(os.path.basename(x), "%Y%m%d%H.glm.nc") for x in glmfiles] # why is this here?
             logging.info("open_mfdataset")
             glm = xarray.open_mfdataset(glmfiles, concat_dim="time_coverage_start", combine="nested")
 
@@ -218,41 +241,22 @@ def get_features(args, subset=None):
                     "W_DN_MAX-N3T5", "W_DN_MAX-N5T1", "W_DN_MAX-N5T3", "W_DN_MAX-N5T5", "W_UP_MAX", "W_UP_MAX-N3T1", "W_UP_MAX-N3T3", "W_UP_MAX-N3T5", "W_UP_MAX-N5T1", "W_UP_MAX-N5T3",
                     "W_UP_MAX-N5T5", "dayofyear_cos", "dayofyear_sin", "forecast_hour", "lat", "lon"]
 
-    if args.model == "NSC3km-12sec":
-        features = ["forecast_hour", "UP_HELI_MAX120-N1T5", "MUCAPE-N5T5", "UP_HELI_MAX-N5T5", "CAPESHEAR-N5T5", "UP_HELI_MAX03", "SRH01-N3T5", "SHR06-N5T3", "T2-N3T3", "UP_HELI_MAX01",
-                    "T2-N5T5", "SBCINH-N5T3", "MUCAPE-N3T3", "UP_HELI_MAX-N3T1", "SRH03-N3T5", "WSPD10MAX-N5T3", "SRH03-N3T3", "UP_HELI_MAX80-N1T5", "UP_HELI_MAX", "UP_HELI_MAX03-N3T5",
-                    "MLCINH", "MUCAPE-N5T1", "SBCINH", "U925", "U500", "PREC_ACC_NC-N5T5", "SBCINH-N3T3", "UP_HELI_MAX01-N5T3", "W_UP_MAX", "SBCAPE-N5T3", "SBCAPE", "STP-N3T1", "SHR06-N5T1",
-                    "MLLCL-N5T3", "SHR01-N5T5", "SRH01-N3T3", "STP-N3T3", "SHR01-N3T3", "TD2-N3T3", "PSFC-N3T5", "CAPESHEAR-N3T3", "UP_HELI_MAX01-N3T3", "W_UP_MAX-N3T3", "U850",
-                    "PSFC-N5T5", "UP_HELI_MAX03-N5T3", "V925", "W_UP_MAX-N5T3", "MUCAPE", "STP-N5T1", "WSPD10MAX-N3T5", "UP_HELI_MAX01-N5T1", "UP_HELI_MAX01-N3T1", "T850", "W_DN_MAX-N5T3",
-                    "PSFC-N5T1", "UP_HELI_MAX01-120", "UP_HELI_MAX01-N1T5", "U700", "PREC_ACC_NC-N5T3", "SBCINH-N3T5", "W_UP_MAX-N5T5", "SRH03-N5T5", "lon", "UP_HELI_MAX01-N3T5", "SBCAPE-N5T1",
-                    "W_DN_MAX-N3T3", "PSFC-N5T3", "SRH01-N5T1", "lat", "SBCAPE-N3T5", "SBCAPE-N3T3", "SRH01-N5T3", "PREC_ACC_NC-N3T1", "MLLCL-N5T5", "TD700", "CAPESHEAR-N5T3", "UP_HELI_MAX03-N3T1",
-                    "SRH03-N5T3", "MLLCL-N3T3", "PSFC", "MLLCL-N3T1", "UP_HELI_MAX-N3T3", "UP_HELI_MAX03-N5T1", "TD2-N3T1", "MUCAPE-N3T1", "SRH03", "SBCAPE-N3T1", "TD2-N5T1", "SHR06",
-                    "MLLCL-N3T5", "UP_HELI_MAX01-N5T5", "SBCAPE-N5T5", "T2-N3T1", "UP_HELI_MAX01-120-N1T5", "T2-N5T3", "TD2-N5T5", "STP-N3T5", "T925", "TD925", "SBCINH-N5T1", "SHR06-N3T3",
-                    "SHR01", "W_DN_MAX-N5T1", "SHR01-N5T1", "PSFC-N3T1", "UP_HELI_MAX-N5T3", "TD2", "STP-N5T3", "PSFC-N3T3", "SHR01-N3T5", "MLLCL-N5T1", "UP_HELI_MAX120", "PREC_ACC_NC-N3T3",
-                    "UP_HELI_MAX-N5T1", "UP_HELI_MAX80", "PREC_ACC_NC", "SHR06-N3T1", "W_DN_MAX-N3T1", "W_UP_MAX-N3T1", "SRH01", "W_UP_MAX-N3T5", "T2", "UP_HELI_MAX03-N5T5", "TD850",
-                    "SHR01-N3T1", "T2-N3T5", "STP-N5T5", "UP_HELI_MAX03-N3T3", "MUCAPE-N3T5", "WSPD10MAX-N3T3", "W_DN_MAX-N5T5", "MLLCL", "CAPESHEAR-N3T5", "SHR06-N3T5", "V700",
-                    "SBCINH-N5T5", "T500", "TD2-N3T5", "STP", "CAPESHEAR-N5T1", "W_DN_MAX-N3T5", "SBCINH-N3T1", "WSPD10MAX-N3T1", "PREC_ACC_NC-N3T5", "CAPESHEAR-N3T1", "WSPD10MAX-N5T5",
-                    "SRH01-N3T1", "WSPD10MAX-N5T1", "CAPESHEAR", "V500", "WSPD10MAX", "W_UP_MAX-N5T1", "MUCAPE-N5T3", "T2-N5T1", "TD500", "SRH03-N3T1", "SHR06-N5T5", "SHR01-N5T3",
-                    "SRH01-N5T5", "T700", "W_DN_MAX", "PREC_ACC_NC-N5T1", "SRH03-N5T1", "TD2-N5T3", "V850", "UP_HELI_MAX-N3T5", "UP_HELI_MAX-N1T5", "LR75"] 
-        
-        if args.suite == "with_storm_mode":
-            features.extend([ "SS_Supercell_prob", "SS_Supercell", "SS_Supercell_nprob", "SS_QLCS_prob", "SS_QLCS", "SS_QLCS_nprob", "SS_Disorganized_prob", "SS_Disorganized",
-                    "SS_Disorganized_nprob", "CNN_1_Supercell_prob", "CNN_1_Supercell", "CNN_1_Supercell_nprob", "CNN_1_QLCS_prob", "CNN_1_QLCS", "CNN_1_QLCS_nprob", "CNN_1_Disorganized_prob",
-                    "CNN_1_Disorganized", "CNN_1_Disorganized_nprob", "DNN_1_Supercell_prob", "DNN_1_Supercell", "DNN_1_Supercell_nprob", "DNN_1_QLCS_prob", "DNN_1_QLCS",
-                    "DNN_1_QLCS_nprob", "DNN_1_Disorganized_prob", "DNN_1_Disorganized", "DNN_1_Disorganized_nprob"])
-        elif args.suite == "with_CNN_DNN_storm_mode_nprob":
-            features.extend(["CNN_1_Supercell_nprob", "CNN_1_QLCS_nprob", "CNN_1_Disorganized_nprob", "DNN_1_Supercell_nprob", "DNN_1_QLCS_nprob", "DNN_1_Disorganized_nprob"])
-        elif args.suite == "with_CNN_DNN_storm_mode_prob":
-            features.extend(["CNN_1_Supercell_prob", "CNN_1_QLCS_prob", "CNN_1_Disorganized_prob", "DNN_1_Supercell_prob", "DNN_1_QLCS_prob", "DNN_1_Disorganized_prob"])
-        elif args.suite == "simple_with_CNN_storm_mode_nprob":
-            features = ["forecast_hour", "UP_HELI_MAX-N3T3", "SHR01-N3T3", "SBCAPE", "SHR06-N3T3", "WSPD10MAX-N3T3", "CNN_1_Supercell_nprob", "CNN_1_QLCS_nprob", "CNN_1_Disorganized_nprob"]
-        elif args.suite == "simple_without_CNN_storm_mode_nprob":
-            features = ["forecast_hour", "UP_HELI_MAX-N3T3", "SHR01-N3T3", "SBCAPE", "SHR06-N3T3", "WSPD10MAX-N3T3"]
-        
-        features.extend(["dayofyear_sin", "dayofyear_cos", "Local_Solar_Hour_sin", "Local_Solar_Hour_cos"])
-        
+    elif args.model.startswith("NSC"):
+        # Had static list before Nov 24, 2022. But these 33 predictors were missing from the default suite. They weren't even my first commit to github.
+        # Why did they disappear? Maybe when I accidentally deleted my work directory in Oct 2021.
+        # {'LR75-N5T5', 'REFL_COM-N5T3', 'LR75-N5T1', 'HAILCAST_DIAM_MAX-N5T1', 'HAILCAST_DIAM_MAX-N3T3', 'UP_HELI_MIN-N5T3', 'UP_HELI_MIN-N5T5',
+        # 'HAILCAST_DIAM_MAX-N3T1', 'UP_HELI_MIN', 'REFL_COM-N5T1', 'REFL_COM-N5T5', 'MLCINH-N3T1', 'REFL_COM-N3T1', 'REFL_COM-N3T3', 'HAILCAST_DIAM_MAX', 'REFL_COM', 'HAILCAST_DIAM_MAX-N5T3', 
+        # 'REFL_COM-N3T5', 'UP_HELI_MIN-N5T1', 'MLCINH-N5T5', 'MLCINH-N3T5', 'UP_HELI_MIN-N3T5', 'MLCINH-N5T3', 'LR75-N3T1', 'HAILCAST_DIAM_MAX-N5T5', 
+        # 'HAILCAST_DIAM_MAX-N3T5', 'UP_HELI_MIN-N3T3', 'MLCINH-N5T1', 'LR75-N5T3', 'LR75-N3T3', 'UP_HELI_MIN-N3T1', 'LR75-N3T5', 'MLCINH-N3T3'}
 
-    assert len(set(features)) == len(features), f"repeated feature(s) {set(features)}"
+        features = open(f"suite/{args.model}.{args.suite}.txt","r").read().splitlines() # Hopefully these somewhat alphabetically-sorted lists are easier to spot mistakes in.
+       
+    else:
+        logging.error("Can't get feature suite for unexpected model {model}")
+        
+    if len(set(features)) != len(features):
+        logging.warning(f"repeated feature(s) {set([x for x in features if features.count(x) > 1])}")
+        features = list(set(features))
 
     return features
 
