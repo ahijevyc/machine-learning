@@ -31,6 +31,8 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 
 parser = get_argparser()
+parser.add_argument('--ifile', type=argparse.FileType("r"), 
+                    help="parquet input file")
 parser.add_argument('--nprocs', type=int, default=0,
                     help="verify this many forecast hours in parallel")
 
@@ -38,19 +40,21 @@ args = parser.parse_args()
 logging.info(args)
 
 # Assign arguments to simple-named variables
-clobber     = args.clobber
-debug       = args.debug
-flash       = args.flash
-glm         = args.glm
-kfold       = args.kfold
-model       = args.model
-nfit        = args.nfits
-nprocs      = args.nprocs
-rptdist     = args.rptdist
-savedmodel  = args.savedmodel
-teststart   = args.teststart
-suite       = args.suite
-twin        = args.twin
+clobber = args.clobber
+debug = args.debug
+flash = args.flash
+glm = args.glm
+ifile = args.ifile
+kfold = args.kfold
+model = args.model
+nfit = args.nfits
+nprocs = args.nprocs
+rptdist = args.rptdist
+savedmodel = args.savedmodel
+testend = args.testend
+teststart = args.teststart
+suite = args.suite
+twin = args.twin
 
 
 if debug:
@@ -61,9 +65,9 @@ if debug:
 if savedmodel:
     pass
 else:
-    savedmodel = savedmodel_default(args, fhr_str='f01-f48') # use model trained on f01-f48 regardless of the hour you are testing
+    # use model trained on f01-f48 regardless of the hour you are testing
+    savedmodel = savedmodel_default(args, fhr_str='f01-f48')
 logging.info(f"savedmodel={savedmodel}")
-
 
 for ifold in range(kfold):
     for i in range(0, nfit):
@@ -77,51 +81,41 @@ for ifold in range(kfold):
 
 
 odir = os.path.join("/glade/scratch", os.getenv("USER"))
-if glm: odir = os.path.join(odir, "GLM")
+if glm:
+    odir = os.path.join(odir, "GLM")
 if not os.path.exists(odir):
     logging.info(f"making directory {odir}")
     os.mkdir(odir)
-
-ofile = os.path.realpath(f"nn/nn_{savedmodel}.{kfold}fold.daily.scores.txt")
-if not clobber and os.path.exists(ofile):
-    logging.info(f"Exiting because output file {ofile} exists. Use --clobber option to override.")
-    sys.exit(0)
-
-logging.info(f"output file will be {ofile}")
 
 ##################################
 
 
 logging.info(f"Read {model} predictors")
 if model == "HRRR":
-    ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.par'
+    if ifile is None:
+        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.par'
     if debug:
-        ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.fastdebug.par'
-    scalingfile = "/glade/work/ahijevyc/NSC_objects/HRRR/scaling_values_all_HRRRX.pk"
+        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.fastdebug.par'
     nfhr = 48
-elif model == "NSC3km-12sec":
-    ifile0 = f'{model}.par'
+elif model.startswith("NSC"):
+    if ifile is None:
+        ifile = f'{model}.par'
     if debug:
-        ifile0 = f'/glade/work/ahijevyc/NSC_objects/fastdebug.par'
-    scalingfile = f"scaling_values_{model}_{teststart:%Y%m%d_%H%M}.pk"
+        ifile = f'/glade/work/ahijevyc/NSC_objects/fastdebug.par'
     nfhr = 36
 
 
-if os.path.exists(ifile0):
-    logging.info(f'reading {ifile0}')
-    df = pd.read_parquet(ifile0, engine="pyarrow")
+if os.path.exists(ifile):
+    logging.info(f'reading {ifile}')
+    df = pd.read_parquet(ifile, engine="pyarrow")
 else:
     logging.error(f"why is there no parquet file for {model}?")
     logging.error(
-        f"Do you need to run train_stormrpts_dnn.py to make {ifile0}?")
+        f"Do you need to run train_stormrpts_dnn.py to make {ifile}?")
     sys.exit(1)
 
 
-df, rptcols = rptdist2bool(df, rptdist, twin)
-
-if glm:
-    df["flashes"] = df["flashes"] >= flash
-    rptcols.append("flashes")
+df, rptcols = rptdist2bool(df, args)
 
 # This script expects MultiIndex valid_time, projection_y_coordinate, projection_x_coordinate (t, ew, ns)
 if df.index.names == ["valid_time", "projection_y_coordinate", "projection_x_coordinate"]:
@@ -133,23 +127,29 @@ else:
         rdict = {"y": "projection_x_coordinate",
                  "x": "projection_y_coordinate"}
         logging.info(f"renaming axes {rdict}")
-        df = df.rename_axis(index=rdict) # NSC3km-12sec saved as forecast_hour, y, x 
+        # NSC3km-12sec saved as forecast_hour, y, x
+        df = df.rename_axis(index=rdict)
     elif ys.min() == 21 and ys.max() == 80 and xs.min() == 12 and xs.max() == 46:
-        rdict = {"x":"projection_x_coordinate", "y":"projection_y_coordinate" }
+        rdict = {"x": "projection_x_coordinate",
+                 "y": "projection_y_coordinate"}
         logging.info(f"renaming axes {rdict}")
-        df = df.rename_axis(index=rdict) # NSC3km-12sec saved as forecast_hour, y, x 
+        # NSC3km-12sec saved as forecast_hour, y, x
+        df = df.rename_axis(index=rdict)
     else:
-        logging.error("unexpected x and y coordinates. check mask, training script, parquet file...")
+        logging.error(
+            "unexpected x and y coordinates. check mask, training script, parquet file...")
         sys.exit(1)
 
 
-assert set(df.index.names) == set(['valid_time', 'projection_x_coordinate', 'projection_y_coordinate']), f"unexpected index names for df {df.index.names}"
+assert set(df.index.names) == set(['valid_time', 'projection_x_coordinate',
+                                   'projection_y_coordinate']), f"unexpected index names for df {df.index.names}"
 
 # This script expects "forecast_hour" spelled out.
-df = df.rename(columns={"fhr": "forecast_hour", "init_time": "initialization_time"})
+df = df.rename(columns={"fhr": "forecast_hour",
+               "init_time": "initialization_time"})
 
 # Make initialization_time a MultiIndex level
-df = df.set_index("initialization_time",append=True)
+df = df.set_index("initialization_time", append=True)
 
 
 validtimes = df.index.get_level_values(level="valid_time")
@@ -158,15 +158,36 @@ logging.info(f"range of valid times: {validtimes.min()} - {validtimes.max()}")
 
 # This is done in train_stormrpts_dnn.py. Important to do here too.
 logging.info(f"Sort by valid_time")
-df = df.sort_index(level="valid_time") # Can't ignore_index=True like train_stormrpts_dnn.py cause we need multiindex, but it shouldn't affect order
+# Can't ignore_index=True like train_stormrpts_dnn.py cause we need multiindex, but it shouldn't affect order
+df = df.sort_index(level="valid_time")
 
 
+logging.info(f"Use initialization times {teststart} - {testend} for testing")
+before_filtering = len(df)
+df = df.loc[:, :, :, teststart:testend]
+logging.info(
+    f"keep {len(df)}/{before_filtering} cases for testing")
 
-logging.info(f"Drop initialization times at or after {teststart}")
-before_filtering  = len(df)
-df = df.loc[:,:,:,teststart:]
-logging.info(f"keep {len(df)}/{before_filtering} cases with init times at or later than {teststart}")
+itimes = df.index.get_level_values(level="initialization_time")
+teststart = itimes.min()
+testend = itimes.max()
+ofile = os.path.realpath(
+    f"nn/nn_{savedmodel}.{kfold}fold.{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}dailyscores.txt")
+if not clobber and os.path.exists(ofile):
+    logging.info(
+        f"Exiting because output file {ofile} exists. Use --clobber option to override.")
+    sys.exit(0)
 
+logging.info(f"output file will be {ofile}")
+
+before_filtering = len(df)
+# Used to test all columns for NA, but we only care about the feature subset being complete. 
+# For example, mode probs are not avaiable for fhr=2 but we don't need to drop fhr=2 if
+# the other features are complete. 
+features = get_features(args)
+logging.info(f"Retain rows where all {len(features)} requested features are present")
+df = df.loc[df[features].notna().all(axis="columns"),:]
+logging.info(f"kept {len(df)}/{before_filtering} cases with no NA features")
 
 logging.info(f"Split {len(rptcols)} labels away from predictors")
 labels = df[rptcols] # labels converted to Boolean above
@@ -178,122 +199,138 @@ print(labels.sum())
 assert labels.sum().all() > 0, "at least 1 class has no True labels in testing set"
 
 
+columns_before_filtering = df.columns
+df = df[features]
+logging.info(f"dropped features {set(columns_before_filtering) - set(df.columns)}")
+logging.info(f"kept {len(df.columns)}/{len(columns_before_filtering)} features")
 
-before_filtering = len(df.columns)
-df = df[get_features(args)]
-logging.info(f"keeping {len(df.columns)}/{before_filtering} predictors")
-
-
-
-logging.info(f"normalize with training cases mean and std in {scalingfile}")
-sv = pd.read_pickle(scalingfile) # conda activate tf if AttributeError: Can't get attribute 'new_block' on...
-if "fhr" in sv:
-    logging.info("change fhr to forecast_hour in scaling DataFrame")
-    sv = sv.rename(columns={"fhr": "forecast_hour"})
-
-# You might have scaling factors for columns that you dropped already, like -N7 columns.
-extra_sv_columns = set(sv.columns) - set(df.columns)
-if extra_sv_columns:
-    logging.info(f"dropping {len(extra_sv_columns)} extra scaling factor columns {extra_sv_columns}")
-    sv = sv.drop(columns=extra_sv_columns)
 
 if kfold > 1:
     cv = KFold(n_splits=kfold)
-    cvsplit = cv.split(df)
+    # Convert generator to list. You don't want a generator. 
+    # Generator depletes after first run of statjob, and if run serially, next time statjob is executed the entire fold loop is skipped. 
+    cvsplit = list(cv.split(df))
 else:
-    # Emulate a 1-split KFold object.
-    # Put all cases in test split. They are already after teststart.
+    # Emulate a 1-split KFold object with all cases in test split.
     cvsplit = [([], np.arange(len(df)))]
 
-def statjob(fhr,statcurves=None):
+
+def statjob(fhr, statcurves=None):
     if statcurves is None:
         statcurves = fhr == "all"
     if statcurves:
-        fig = plt.figure(figsize=(10,7))
+        fig = plt.figure(figsize=(10, 7))
     # this_fhr for all cases, not just one fold
     if fhr == "all":
-        this_fhr = ~df["forecast_hour"].isna() # all finite forecast hours
+        this_fhr = ~df["forecast_hour"].isna()  # all finite forecast hours
     else:
-        this_fhr = df["forecast_hour"] == fhr # Just this fhr
-    # test model
+        this_fhr = df["forecast_hour"] == fhr  # Just this fhr
+    logging.debug(f"{len(this_fhr)} {fhr} fhr model predictions")
     y_preds = pd.DataFrame()
     stattxt = ""
-    for ifold, (train_index, test_index) in enumerate(cvsplit):
-        df_fold = df.iloc[test_index]
-        labels_fold = labels.iloc[test_index]
+    for ifold, (itrain, itest) in enumerate(cvsplit):
+        df_fold = df.iloc[itest]
+        labels_fold = labels.iloc[itest]
         if fhr == "all":
-            this_fold_fhr = ~df_fold["forecast_hour"].isna() # all finite forecast hours
+            # all finite forecast hours
+            this_fold_fhr = ~df_fold["forecast_hour"].isna()
         else:
             this_fold_fhr = df_fold["forecast_hour"] == fhr # Just this fhr
-        df_fold_fhr = df_fold[this_fold_fhr]
+        features = df_fold[this_fold_fhr]
         labels_fold_fhr = labels_fold[this_fold_fhr]
-
-        # Tried normalizing the whole DataFrame df before this function, but you don't want to normalize fhr first. You need them as integers.
-        logging.debug(f"normalize fhr={fhr}")
-        df_fold_fhr = (df_fold_fhr - sv.loc["mean"]) / sv.loc["std"]
 
         for thisfit in range(nfit):
             savedmodel_thisfitfold = f"nn/nn_{savedmodel}_{thisfit}/{kfold}fold{ifold}"
-            logging.info(f"checking {savedmodel_thisfitfold} column order")
-            yl = yaml.load(open(os.path.join(savedmodel_thisfitfold, "config.yaml"),"r"), Loader=yaml.Loader) # not safe (yaml.FullLoader is) but legacy Loader handles argparse.namespace object. 
+            logging.debug(f"checking {savedmodel_thisfitfold} column order")
+            # yaml.Loader is not safe (yaml.FullLoader is) but legacy Loader handles argparse.namespace object.
+            yl = yaml.load(open(
+                os.path.join(savedmodel_thisfitfold, "config.yaml"), "r"),
+                Loader=yaml.Loader)
             yl_labels = yl["labels"]
-            del(yl["labels"]) # delete labels so we can make DataFrame from rest of dictionary.
-            assert configs_match(yl["args"], args), f'this configuration {args} does not match yaml file {yl["args"]}'
-            del(yl["args"]) 
-            assert all(yl_labels == labels_fold_fhr.columns), f"labels {label_fold_fhr.columns} don't match when model was trained {yl_labels}"
-            yl = pd.DataFrame(yl).set_index("columns").T
-            if "fhr" in yl:
-                logging.info("Rename fhr to forecast_hour in yaml columns")
-                yl = yl.rename(columns={"fhr": "forecast_hour"})
-            if len(yl.columns) != len(df_fold_fhr.columns):
-                print(f"length of yaml and df_fold_fhr columns differ {yl.columns} {df_fold_fhr.columns}")
+            # delete labels so we can make DataFrame from rest of dictionary.
+            del (yl["labels"])
+            assert configs_match(
+                yl["args"], args
+            ), f'this configuration {args} does not match yaml file {yl["args"]}'
+            del (yl["args"])
+            assert all(
+                yl_labels == labels_fold_fhr.columns
+            ), f"labels {label_fold_fhr.columns} don't match when model was trained {yl_labels}"
+
+            sv = pd.DataFrame(yl).set_index("columns").T # scaling values DataFrame as from .describe()
+            if sv.columns.size != features.columns.size:
+                logging.error(
+                    f"size of yaml and features columns differ {sv.columns} {features.columns}"
+                )
                 pdb.set_trace()
-            assert np.isclose(yl.reindex(columns=sv.columns), sv.loc[yl.index]).all(), f"pickle and yaml scaling factors don't match up\n{sv}\n{yl}"
-            if not all(yl.columns == df_fold_fhr.columns):
+            if not all(sv.columns == features.columns):
                 logging.info(f"reordering columns")
-                df_fold_fhr = df_fold_fhr.reindex(columns=yl.columns)
-            assert all(yl.columns == df_fold_fhr.columns), f"columns {df.columns} don't match when model was trained {columns}"
+                features = features.reindex(columns=sv.columns)
+            assert all(
+                sv.columns == features.columns
+            ), f"columns {features.columns} don't match when model was trained {sv.columns}"
             logging.info(f"loading {savedmodel_thisfitfold}")
-            model = load_model(savedmodel_thisfitfold, custom_objects=dict(brier_skill_score=brier_skill_score))
-            logging.info(f"predicting fhr {fhr}  fit {thisfit}  fold{ifold}...")
-            Y = model.predict(df_fold_fhr.to_numpy(dtype='float32')) # Grab numpy array of predictions.
-            Y = pd.DataFrame(Y, columns=labels_fold_fhr.columns, index=df_fold_fhr.index) # Put prediction numpy array into DataFrame with index (row) and column labels.
+            model = load_model(
+                savedmodel_thisfitfold,
+                custom_objects=dict(brier_skill_score=brier_skill_score))
+            logging.info(
+                f"predicting fhr {fhr}  fit {thisfit}  fold{ifold}...")
+            norm_features = (features - sv.loc["mean"]) / sv.loc["std"]
+            # Grab numpy array of predictions.
+            Y = model.predict(norm_features.to_numpy(dtype='float32'))
+            # Put prediction numpy array into DataFrame with index (row) and column labels.
+            Y = pd.DataFrame(Y, columns=labels_fold_fhr.columns, index=features.index)
             for init_time, data, in pd.concat([Y, labels_fold_fhr], axis=1).groupby("initialization_time"):
-                for rpt_type in labels_fold_fhr.columns: # for each report type
+                # for each report type
+                for rpt_type in labels_fold_fhr.columns:
                     y_pred, labels_fhr = data[rpt_type].iloc[:,0], data[rpt_type].iloc[:,1] # grab this particular report type
                     bss = brier_skill_score(labels_fhr, y_pred)
                     base_rate = labels_fhr.mean()
                     auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
                     aps = sklearn.metrics.average_precision_score(labels_fhr, y_pred)
-                    logging.info(f"{rpt_type} fit={thisfit} fold={ifold} fhr={fhr} {init_time} {bss} {base_rate} {auc} {aps}")
-                    stattxt += f"{rpt_type},{thisfit},{ifold},{fhr},{init_time},{bss},{base_rate},{auc},{aps}\n"
-            Y = pd.concat([Y], keys=[thisfit], names=["fit"]) # prepend "fit" level to multilevel DataFrame
-            Y = pd.concat([Y], keys=[ifold], names=["fold"]) # prepend "fold" level
-            y_preds = y_preds.append(Y) # append this fit/fold to the y_preds DataFrame
+                    n = len(y_pred)
+                    logging.debug(
+                        f"{rpt_type} fit={thisfit} fold={ifold} fhr={fhr} {init_time} {bss} {base_rate} {auc} {aps} {n}"
+                    )
+                    stattxt += f"{rpt_type},{thisfit},{ifold},{fhr},{init_time},{bss},{base_rate},{auc},{aps},{n}\n"
+            # prepend "fit" level to multilevel DataFrame
+            Y = pd.concat([Y], keys=[thisfit], names=["fit"])
+            # prepend "fold" level
+            Y = pd.concat([Y], keys=[ifold], names=["fold"])
+            # concatenate this fit/fold to the y_preds DataFrame
+            y_preds = pd.concat([y_preds,Y], axis="index")
     # I may have overlapping valid_times from different init_times like fhr=1 from today and fhr=25 from previous day
-    ensmean = y_preds.groupby(level=["valid_time","projection_y_coordinate","projection_x_coordinate","initialization_time"]).mean() # average probability over all nfits initialized at initialization_time and valid at valid_time 
+    # average probability over all nfits initialized at initialization_time and valid at valid_time
+    ensmean = y_preds.groupby(level=[
+        "valid_time", "projection_y_coordinate",
+        "projection_x_coordinate", "initialization_time"
+    ]).mean()
     assert "fit" not in ensmean.index.names, "fit should not be a MultiIndex level of ensmean, the average probability over nfits."
     # for statistic curves plot file name
     thissavedmodel = savedmodel.replace('f01-f48', f'f{fhr}')
-    logging.debug(f"getting ensmean bss, base rate, auc, aps")
+    logging.debug(f"getting ensmean bss, base rate, auc, aps, n")
     for init_time, data, in pd.concat([ensmean, labels[this_fhr]], axis=1).groupby("initialization_time"):
         for rpt_type in labels.columns:
             y_pred, labels_fhr = data[rpt_type].iloc[:,0],data[rpt_type].iloc[:,1]
             bss = brier_skill_score(labels_fhr, y_pred)
             base_rate = labels_fhr.mean()
-            auc = sklearn.metrics.roc_auc_score(labels_fhr, y_pred) if labels_fhr.any() else np.nan
+            auc = sklearn.metrics.roc_auc_score(
+                labels_fhr, y_pred) if labels_fhr.any() else np.nan
             # average_precision_score
             aps = sklearn.metrics.average_precision_score(labels_fhr, y_pred)
-            logging.info(f"{rpt_type} ensmean fold=all fhr={fhr} {init_time} {bss} {base_rate} {auc} {aps}")
-            stattxt += f"{rpt_type},ensmean,all,{fhr},{init_time},{bss},{base_rate},{auc},{aps}\n"
+            n = len(y_pred)
+            logging.info(
+                f"{rpt_type} ensmean fold=all fhr={fhr} {init_time} {bss} {base_rate} {auc} {aps} {n}"
+            )
+            stattxt += f"{rpt_type},ensmean,all,{fhr},{init_time},{bss},{base_rate},{auc},{aps},{n}\n"
     return stattxt
 
+
 if debug:
-    stattxt = statjob(18, statcurves=True)
+    stattxt = statjob('all')
     pdb.set_trace()
     sys.exit(0)
 
-fhrs = range(1, nfhr + 1)
 # allow for datasets like storm mode probabilities, that don't start at fhr=1
 fhrs = df["forecast_hour"].unique()
 fhrs = list(fhrs)
@@ -301,9 +338,11 @@ fhrs.insert(0, "all")  # put "all" first because it takes the longest
 if nprocs:
     # Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
     # execcasper --ncpus=13 --mem=50GB # gpus not neeeded for verification
-    chunksize = int(np.ceil(len(fhrs)/float(nprocs)))
     pool = multiprocessing.Pool(processes=nprocs)
-    data = pool.map(statjob, fhrs, chunksize)
+    # used to set chunksize > 1, but because "all" takes so much longer, the chunk that includes "all" is screwed. Use default chunksize=1 
+    # Tried imap_unordered, but I like reproducability. Plus I could not sort fhrs
+    # when string "all" was mixed with integers.
+    data = pool.map(statjob, fhrs)
     pool.close()
 else:
     data = []
@@ -312,7 +351,7 @@ else:
 
 
 with open(ofile, "w") as fh:
-    fh.write('class,mem,fold,fhr,init_time,bss,base rate,auc,aps\n')
+    fh.write('class,mem,fold,fhr,init_time,bss,base rate,auc,aps,n\n')
     fh.write(''.join(data))
 
 logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")

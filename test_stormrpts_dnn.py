@@ -44,7 +44,7 @@ clobber = args.clobber
 debug = args.debug
 flash = args.flash
 glm = args.glm
-ifile = args.ifile.name if args.ifile else None
+ifile = args.ifile
 kfold = args.kfold
 model = args.model
 nfit = args.nfits
@@ -96,13 +96,12 @@ if model == "HRRR":
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.par'
     if debug:
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.fastdebug.par'
-    scalingfile = "/glade/work/ahijevyc/NSC_objects/HRRR/scaling_values_all_HRRRX.pk"
     nfhr = 48
-elif model == "NSC3km-12sec":
-    ifile = f'{model}.par'
+elif model.startswith("NSC"):
+    if ifile is None:
+        ifile = f'{model}.par'
     if debug:
         ifile = f'/glade/work/ahijevyc/NSC_objects/fastdebug.par'
-    scalingfile = f"/glade/work/ahijevyc/NSC_objects/scaling_values_{model}_{teststart:%Y%m%d_%H%M}.pk"
     nfhr = 36
 
 
@@ -116,11 +115,7 @@ else:
     sys.exit(1)
 
 
-df, rptcols = rptdist2bool(df, rptdist, twin)
-
-if glm:
-    df["flashes"] = df["flashes"] >= flash
-    rptcols.append("flashes")
+df, rptcols = rptdist2bool(df, args)
 
 # This script expects MultiIndex valid_time, projection_y_coordinate, projection_x_coordinate (t, ew, ns)
 if df.index.names == ["valid_time", "projection_y_coordinate", "projection_x_coordinate"]:
@@ -167,7 +162,7 @@ logging.info(f"Sort by valid_time")
 df = df.sort_index(level="valid_time")
 
 
-logging.info(f"Use initialization times {teststart}-{testend} for testing")
+logging.info(f"Use initialization times {teststart} - {testend} for testing")
 before_filtering = len(df)
 df = df.loc[:, :, :, teststart:testend]
 logging.info(
@@ -177,7 +172,7 @@ itimes = df.index.get_level_values(level="initialization_time")
 teststart = itimes.min()
 testend = itimes.max()
 ofile = os.path.realpath(
-        f"nn/nn_{savedmodel}.{kfold}fold.scores{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.txt")
+    f"nn/nn_{savedmodel}.{kfold}fold.{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}scores.txt")
 if not clobber and os.path.exists(ofile):
     logging.info(
         f"Exiting because output file {ofile} exists. Use --clobber option to override.")
@@ -185,6 +180,14 @@ if not clobber and os.path.exists(ofile):
 
 logging.info(f"output file will be {ofile}")
 
+before_filtering = len(df)
+# Used to test all columns for NA, but we only care about the feature subset being complete. 
+# For example, mode probs are not avaiable for fhr=2 but we don't need to drop fhr=2 if
+# the other features are complete. 
+features = get_features(args)
+logging.info(f"Retain rows where all {len(features)} requested features are present")
+df = df.loc[df[features].notna().all(axis="columns"),:]
+logging.info(f"kept {len(df)}/{before_filtering} cases with no NA features")
 
 logging.info(f"Split {len(rptcols)} labels away from predictors")
 labels = df[rptcols]  # labels converted to Boolean above
@@ -196,24 +199,11 @@ print(labels.sum())
 assert labels.sum().all() > 0, "at least 1 class has no True labels in testing set"
 
 
-before_filtering = len(df.columns)
-df = df[get_features(args)]
-logging.info(f"keeping {len(df.columns)}/{before_filtering} predictors")
+columns_before_filtering = df.columns
+df = df[features]
+logging.info(f"dropped features {set(columns_before_filtering) - set(df.columns)}")
+logging.info(f"kept {len(df.columns)}/{len(columns_before_filtering)} features")
 
-
-logging.info(f"normalize with training cases mean and std in {scalingfile}")
-# conda activate tf if AttributeError: Can't get attribute 'new_block' on...
-sv = pd.read_pickle(scalingfile)
-if "fhr" in sv:
-    logging.info("change fhr to forecast_hour in scaling DataFrame")
-    sv = sv.rename(columns={"fhr": "forecast_hour"})
-
-# You might have scaling factors for columns that you dropped already, like -N7 columns.
-extra_sv_columns = set(sv.columns) - set(df.columns)
-if extra_sv_columns:
-    logging.info(
-        f"dropping {len(extra_sv_columns)} extra scaling factor columns {extra_sv_columns}")
-    sv = sv.drop(columns=extra_sv_columns)
 
 if kfold > 1:
     cv = KFold(n_splits=kfold)
@@ -249,14 +239,10 @@ def statjob(fhr, statcurves=None):
         features = df_fold[this_fold_fhr]
         labels_fold_fhr = labels_fold[this_fold_fhr]
 
-        # Tried normalizing the whole DataFrame df before this function, but you can't normalize forecast_hour first. You need them as integers.
-        logging.debug(f"normalize")
-        features = (features - sv.loc["mean"]) / sv.loc["std"]
-
         for thisfit in range(nfit):
             savedmodel_thisfitfold = f"nn/nn_{savedmodel}_{thisfit}/{kfold}fold{ifold}"
             logging.debug(f"checking {savedmodel_thisfitfold} column order")
-            # not safe (yaml.FullLoader is) but legacy Loader handles argparse.namespace object.
+            # yaml.Loader is not safe (yaml.FullLoader is) but legacy Loader handles argparse.namespace object.
             yl = yaml.load(open(
                 os.path.join(savedmodel_thisfitfold, "config.yaml"), "r"),
                 Loader=yaml.Loader)
@@ -270,32 +256,28 @@ def statjob(fhr, statcurves=None):
             assert all(
                 yl_labels == labels_fold_fhr.columns
             ), f"labels {label_fold_fhr.columns} don't match when model was trained {yl_labels}"
-            yl = pd.DataFrame(yl).set_index("columns").T
-            if "fhr" in yl:
-                logging.info("Rename fhr to forecast_hour in yaml columns")
-                yl = yl.rename(columns={"fhr": "forecast_hour"})
-            if yl.columns.size != features.columns.size:
-                print(
-                    f"size of yaml and features columns differ {yl.columns} {features.columns}"
+
+            sv = pd.DataFrame(yl).set_index("columns").T # scaling values DataFrame as from .describe()
+            if sv.columns.size != features.columns.size:
+                logging.error(
+                    f"size of yaml and features columns differ {sv.columns} {features.columns}"
                 )
                 pdb.set_trace()
-            assert np.isclose(
-                yl.reindex(columns=sv.columns), sv.loc[yl.index]).all(
-            ), f"pickle and yaml scaling factors don't match up\n{sv}\n{yl}"
-            if not all(yl.columns == features.columns):
+            if not all(sv.columns == features.columns):
                 logging.info(f"reordering columns")
-                features = features.reindex(columns=yl.columns)
+                features = features.reindex(columns=sv.columns)
             assert all(
-                yl.columns == features.columns
-            ), f"columns {features.columns} don't match when model was trained {yl.columns}"
+                sv.columns == features.columns
+            ), f"columns {features.columns} don't match when model was trained {sv.columns}"
             logging.info(f"loading {savedmodel_thisfitfold}")
             model = load_model(
                 savedmodel_thisfitfold,
                 custom_objects=dict(brier_skill_score=brier_skill_score))
             logging.info(
                 f"predicting fhr {fhr}  fit {thisfit}  fold{ifold}...")
+            norm_features = (features - sv.loc["mean"]) / sv.loc["std"]
             # Grab numpy array of predictions.
-            Y = model.predict(features.to_numpy(dtype='float32'))
+            Y = model.predict(norm_features.to_numpy(dtype='float32'))
             # Put prediction numpy array into DataFrame with index (row) and column labels.
             Y = pd.DataFrame(Y, columns=labels_fold_fhr.columns, index=features.index)
             # for each report type

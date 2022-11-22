@@ -44,16 +44,19 @@ def baseline_model(input_dim=None, name=None, numclasses=None, neurons=16, layer
     return model
 
 
-def modedate(ifiles, target_dates):
-    target_dates = pd.to_datetime(target_dates)
-    start, end = target_dates.min(), target_dates.max()
-    pattern = r'/20\d\d[01][0-9][0123][0-9][012][0-9][0-5][0-9]/'
+def modedate(modeprob_files, model_dates):
+    model_dates = pd.to_datetime(np.unique(model_dates))
+    pattern = r'/20\d\d[01][0-9][0123][0-9][012][0-9][0-5][0-9]'
     filtered_ifiles = []
-    for ifile in ifiles:
-        yyyymmddhhmm = re.search(pattern, ifile).group().lstrip("/").rstrip("/")
+    started_with = len(modeprob_files)
+    for ifile in modeprob_files:
+        yyyymmddhhmm = re.search(pattern, ifile).group().lstrip("/")
         itime = pd.to_datetime(yyyymmddhhmm, format='%Y%m%d%H%M')
-        if itime >= start and itime <= end:
+        if itime in model_dates:
             filtered_ifiles.append(ifile)
+        else:
+            logging.debug(f"ignoring modeprob file {itime}. no matching model file")
+    logging.info(f"Kept {len(filtered_ifiles)}/{started_with} mode prob files")
     return filtered_ifiles
 
 
@@ -116,19 +119,20 @@ def main():
     fhr            = args.fhr
     fits           = args.fits
     folds          = args.folds
-    nfit           = args.nfits
     glm            = args.glm
     kfold          = args.kfold
     layer          = args.layers
     learning_rate  = args.learning_rate
-    reg_penalty    = args.reg_penalty
     model          = args.model
     neurons        = args.neurons
+    nfit           = args.nfits
     optimizer      = args.optimizer
+    reg_penalty    = args.reg_penalty # L2
     rptdist        = args.rptdist
     savedmodel     = args.savedmodel
     seed           = args.seed
-    teststart      = args.teststart
+    trainend       = args.trainend
+    trainstart     = args.trainstart
     suite          = args.suite
     twin           = args.twin
 
@@ -172,10 +176,8 @@ def main():
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.par'
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.par'
         if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.fastdebug.par'
-        scalingfile = f"/glade/work/ahijevyc/NSC_objects/{model}/scaling_values_all_HRRRX.pk"
-    elif model == "NSC3km-12sec":
+    elif model.startswith("NSC"):
         ifile = f'{model}.par'
-        scalingfile = f"scaling_values_{model}_{teststart:%Y%m%d_%H%M}.pk"
 
     if os.path.exists(ifile):
         logging.info(f'reading {ifile}')
@@ -189,8 +191,10 @@ def main():
             ifiles = glob.glob(search_str)
             search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202*00-0000.par' # append HRRR to HRRRX.
             ifiles.extend(glob.glob(search_str))
-        elif model == "NSC3km-12sec":
-            search_str = f'/glade/work/sobash/NSC_objects/grid_data/grid_data_{model}_d01_20*00-0000.par'
+        elif model.startswith("NSC"):
+            search_str = f'/glade/work/sobash/NSC_objects/grid_data_new/grid_data_{model}_d01_20*00-0000.par'
+            if debug:
+                search_str = f'/glade/work/sobash/NSC_objects/grid_data_new/grid_data_{model}_d01_201504*00-0000.par' # smaller subset for debugging
             ifiles = glob.glob(search_str)
 
         # remove largest neighborhood size (fields containing N7 in the name)
@@ -203,7 +207,6 @@ def main():
         # Read list of columns columns2read (includes severe reports)
         logging.info(f"Reading {len(ifiles)} {model} files {search_str}")
         df = pd.concat( pd.read_parquet(ifile, engine="pyarrow", columns=columns2read) for ifile in ifiles) # pd.read_parquet only handles one file at a time, so pd.concat
-        logging.info("done")
 
         # Index df and modeds the same way. 
         logging.info(f"convert df Date to datetime64[ns]")
@@ -215,28 +218,52 @@ def main():
 
         if model.startswith("NSC3km"):
             # Read mode probabilities
-            search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation_zero_filled/20*/label_probabilities_20*00_fh_*.nc'
+            use_hourly_files = False
+            if use_hourly_files:
+                search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation_zero_filled/20*/label_probabilities_20*00_fh_*.nc'
+                ifiles = sorted(glob.glob(search_str))
+                logging.info(f"Found {len(ifiles)} storm mode probability files")
+                ifiles = modedate(ifiles, df.index.get_level_values("initialization_time"))
+                logging.info(f"Read {len(ifiles)} storm mode files in date range of {model} DataFrame")
+                # reset_coords to avoid xarray.core.merge.MergeError: unable to determine if these variables should be coordinates or not in the merged result: {'valid_time'}
+                # set_index to avoid ValueError: Could not find any dimension coordinates to use to order the datasets for concatenation
+                modeds = xarray.open_mfdataset( ifiles, preprocess=lambda x: x.reset_coords(["lon","lat",'valid_time']).set_index(time=['init_time','forecast_hour']),
+                        combine="nested", parallel=True, compat="override", combine_attrs="override") # parallel is faster
+            # Try nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
+            search_str = f'/glade/scratch/ahijevyc/NCAR700_objects/output_object_based/evaluation_zero_filled/20??????0000.nc'
             ifiles = sorted(glob.glob(search_str))
-            logging.info(f"Found {len(ifiles)} storm mode files")
-            ifiles = modedate(ifiles, df.initialization_time)
-            logging.info(f"Read {len(ifiles)} storm mode files in date range of {model} DataFrame")
-            modeds = xarray.open_mfdataset( ifiles, preprocess=lambda x: x.set_index(time=['init_time','forecast_hour']) )
-            logging.info(f"Unstack time dimension")
-            modeds = modeds.unstack('time')
-            logging.info(f"Make x and y indices actual coordinates, so we don't lose track when we mask and drop")
+            logging.info(f"Ignore mode prob files for times that are not present in features DataFrame")
+            ifiles = modedate(ifiles, df.index.get_level_values("initialization_time"))
+            logging.info(f"Open and combine {len(ifiles)} storm mode probability files")
+            # Tried open_mfdataset, but got missing values for all but the first initialization time.
+            modeds = xarray.combine_nested([xarray.open_dataset(ifile) for ifile in ifiles], concat_dim="time")
+            no_time_dim = ["lat","lon","forecast_hour"]
+            logging.info("Remove time dimension from {remove_time_dimension}")
+            for e in no_time_dim:
+                modeds[e] = modeds[e].isel(time=0)
+            modeds = modeds.swap_dims(dict(record="forecast_hour",time="init_time")) 
+            logging.info(f"Make x and y indices actual coordinates so we can apply similarly-structured CONUS mask")
             modeds = modeds.assign_coords(dict(x=modeds.x,y=modeds.y))
             logging.info(f"Use CONUS mask and drop points outside CONUS")
-            modeds = modeds.where(mask, drop=True)
-            logging.info(f"reset xarray Dataset coordinates [lon, lat] to variables")
-            modeds = modeds.reset_coords(["lon","lat"]) 
+            modeds = modeds.where(mask, drop=True) #  even with drop=True you still have nans. mask is not a box. It has irregular disjointed edges.
 
             # In modeds, x : west to east, y : south to north
             # In sobash df, xind : south to north, yind : west to east.
-            modeds = modeds.rename(dict(x="y",y="x",init_time="initialization_time")) #dimensions are renamed to match df.
+            logging.info(f"Rename mode prob dimensions to match index names of df {df.index.names}")
+            modeds = modeds.rename(dict(x="y",y="x",init_time="initialization_time"))
+            logging.info(f"mode prob dimensions now {modeds.dims}")
 
             logging.info(f"merge {model} DataFrame with mode Dataset in xarray")
-            ds = df.to_xarray().merge(modeds, join="inner", compat="override") # if you don't use join="inner" you get a lot of NaNs. override to ignore lat/lon mismatch (TODO: why mismatch?)
-            df = ds.to_dataframe().dropna(axis="index") # for some reason there are still nans even after using join="inner" above.
+            # slash df fhrs to match modeds. modeds has fhr 12-35. Why? It is faster but would be nice to keep forecast hours 1-11. 
+            # df = df.sort_index(level=[0,1,2,3]).loc[(slice(None),slice(None),slice(None),slice(12,35))]
+            # Tried join="left" but it ignored all the modeds columns. Tried "inner" but it ignored df fhrs 1-11 and 36.
+            ds = df.to_xarray().merge(modeds, join="outer", compat="override") #  override to ignore the lat/lon mismatch (assumed small)
+            logging.info("Convert xarray Dataset to pandas DataFrame")
+            df = ds.to_dataframe()
+            # drop row if all columns are na. modeprobs are na for some forecast hours.
+            logging.info(f"Drop rows with all NAs from {len(df)} row DataFrame")
+            df = df.dropna(how="all")
+            logging.info(f"{len(df)} remaining")
 
         # Derived fields
         df["dayofyear"] = df["valid_time"].dt.dayofyear
@@ -249,34 +276,30 @@ def main():
         df = df.astype(dtype_dict, copy=False)
         df = df.reset_index().set_index(["valid_time","y","x"])
 
-        earliest_valid_time = df.index.get_level_values(level="valid_time").min()
-        latest_valid_time = df.index.get_level_values(level="valid_time").max()
-        assert latest_valid_time > pd.to_datetime("20160101"), "DataFrame completely before GLM exists"
-        glmds = get_glm(twin, rptdist)
-        glmds = glmds.sel(valid_time = slice(earliest_valid_time,latest_valid_time)) # Trim GLM to time window of model data
-        logging.info(f"Merge flashes with {model} DataFrame")
-        # In glmds, x : west to east, y : south to north
-        # In sobash df, xind : south to north, yind : west to east.
-        glmds = glmds.rename(dict(x="y",y="x")) #dimensions are renamed to match sobash df.
-        df = df.merge(glmds.to_dataframe(), left_on=["valid_time","y","x"], right_on=["valid_time","y","x"])
-        #Do {model} and GLM overlap at all?"
-        assert not df.empty, f"Merged {model}/GLM Dataset is empty."
-        # Sanity check--make sure prediction model and GLM grid box lat lons are similar
-        assert (df.lon_y - df.lon_x).max() < 0.1, f"{model} and glm longitudes don't match"
-        assert (df.lat_y - df.lat_x).max() < 0.1, f"{model} and glm lats don't match"
-        df = df.drop(columns=["lon_y","lat_y"])
-        df = df.rename(columns=dict(lon_x="lon",lat_x="lat")) # helpful for scale factor pickle file.
+        if glm:
+            earliest_valid_time = df.index.get_level_values(level="valid_time").min()
+            latest_valid_time = df.index.get_level_values(level="valid_time").max()
+            assert latest_valid_time > pd.to_datetime("20160101"), "DataFrame completely before GLM exists"
+            glmds = get_glm(twin, rptdist)
+            glmds = glmds.sel(valid_time = slice(earliest_valid_time,latest_valid_time)) # Trim GLM to time window of model data
+            logging.info(f"Merge flashes with {model} DataFrame")
+            # In glmds, x : west to east, y : south to north
+            # In sobash df, xind : south to north, yind : west to east.
+            glmds = glmds.rename(dict(x="y",y="x")) #dimensions are renamed to match sobash df.
+            df = df.merge(glmds.to_dataframe(), left_on=["valid_time","y","x"], right_on=["valid_time","y","x"])
+            #Do {model} and GLM overlap at all?"
+            assert not df.empty, f"Merged {model}/GLM Dataset is empty."
+            # Sanity check--make sure prediction model and GLM grid box lat lons are similar
+            assert (df.lon_y - df.lon_x).max() < 0.1, f"{model} and glm longitudes don't match"
+            assert (df.lat_y - df.lat_x).max() < 0.1, f"{model} and glm lats don't match"
+            df = df.drop(columns=["lon_y","lat_y"])
+            df = df.rename(columns=dict(lon_x="lon",lat_x="lat")) # helpful for scale factor pickle file.
     
         logging.info(f"writing {ifile}")
         df.to_parquet(ifile)
 
     # Convert distance to closest storm report to True/False based on distance and time thresholds 
-    df, rptcols = rptdist2bool(df, rptdist, twin)
-
-    if glm:
-        df["flashes"] = df["flashes"] >= flash
-        rptcols.append("flashes")
-
+    df, rptcols = rptdist2bool(df, args)
 
     plotclimo=False
     if plotclimo:
@@ -293,12 +316,25 @@ def main():
 
 
     # HRRRv3 to v4 at 20201202 0z.
-    logging.info(f"Drop initialization times at or after {teststart}")
+    logging.info(f"Use initialization times {trainstart} through {trainend} for training")
     before_filtering = len(df)
-    train_idx  = df.initialization_time.astype('datetime64[ns]') < teststart 
-    df = df.drop(columns="initialization_time")
+    train_idx  = (trainstart <= df.initialization_time) & (df.initialization_time <= trainend)
     df = df[train_idx]
-    logging.info(f"keep {len(df)}/{before_filtering} cases with init times earlier than {teststart}")
+    setattr(args, 'trainstart', df.initialization_time.min())
+    setattr(args, 'trainend', df.initialization_time.max())
+    logging.info(f"After filtering, trainstart={args.trainstart} trainend={args.trainend}")
+    df = df.drop(columns="initialization_time")
+    logging.info(f"keep {len(df)}/{before_filtering} cases for training")
+
+
+    before_filtering = len(df)
+    # Used to test all columns for NA, but we only care about the feature subset being complete. 
+    # For example, mode probs are not avaiable for fhr=2 but we don't need to drop fhr=2 if
+    # the other features are complete. 
+    features = get_features(args)
+    logging.info(f"Retain rows where all {len(features)} requested features are present")
+    df = df.loc[df[features].notna().all(axis="columns"),:]
+    logging.info(f"kept {len(df)}/{before_filtering} cases with no NA features")
 
 
     logging.info(f"Split {len(rptcols)} labels away from predictors")
@@ -313,30 +349,19 @@ def main():
 
     # This filtering of features must occur after initialization time is used and discarded, and after labels are separated and saved. 
     before_filtering = df.columns
-    df = df[get_features(args)]
+    df = df[features]
     logging.info(f"dropped features {set(before_filtering) - set(df.columns)}")
     logging.info(f"kept {len(df.columns)}/{len(before_filtering)} features")
 
 
-    logging.info(f"normalize data with training cases mean and std in {scalingfile}")
-    if os.path.exists(scalingfile):
-        logging.info(f"using pickle file {scalingfile}")
-        sv = pickle.load(open(scalingfile, "rb")).astype(np.float32)
-    else:
-        logging.info(f"calculating mean and std and saving to {scalingfile}")
-        sv = df.describe()
-        sv.to_pickle(scalingfile)
-
-    # You might have scaling factors for columns that you dropped already, like -N7 columns.
-    extra_sv_columns = set(sv.columns) - set(df.columns)
-    if extra_sv_columns:
-        logging.warning(f"dropping {len(extra_sv_columns)} extra scaling factor columns {extra_sv_columns}")
-        sv = sv.drop(columns=extra_sv_columns)
+    logging.info(f"calculating mean and std scaling values")
+    sv = df.describe()
 
     # Check for zero standard deviation. (can't normalize)
     stdiszero = sv.loc["std"] == 0
     if stdiszero.any():
         logging.error(f"{sv.columns[stdiszero]} std equals zero")
+    logging.info(f"normalize data")
     df = (df - sv.loc["mean"]) / sv.loc["std"]
     logging.info('done normalizing')
 
@@ -391,6 +416,7 @@ def main():
                                 labels=labels.columns.to_list(),
                                 args=args,
                                 ), yfile)
+
 
 
 if __name__ == "__main__":
