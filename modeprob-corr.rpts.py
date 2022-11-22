@@ -81,7 +81,7 @@ else:
     logging.error(f"Do you need to run train_stormrpts_dnn.py to make {ifile0}?")
     sys.exit(1)
 
-df, rptcols = rptdist2bool(df, rptdist, twin)
+df, rptcols = rptdist2bool(df, args)
 
 
 df2=df[['SS_Supercell_nprob','SS_QLCS_nprob','SS_Disorganized_nprob','CNN_1_Supercell_nprob','CNN_1_QLCS_nprob','CNN_1_Disorganized_nprob','DNN_1_Supercell_nprob','DNN_1_QLCS_nprob','DNN_1_Disorganized_nprob','any_rptdist_2hr','torn_rptdist_2hr','hailone_rptdist_2hr','wind_rptdist_2hr','sigwind_rptdist_2hr']]
