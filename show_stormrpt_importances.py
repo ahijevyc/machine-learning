@@ -122,7 +122,7 @@ def main():
     rptdist = 40
     twin = 2
     logging.info(f"events in {rptdist}km and {twin}h window")
-    df, rptcols = rptdist2bool(df, rptdist, twin)
+    df, rptcols = rptdist2bool(df, args)
 
     logging.info(f"split labels {rptcols} from DataFrame")
     labels = df[rptcols]
