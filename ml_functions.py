@@ -7,6 +7,8 @@ import pandas as pd
 import pdb
 import numpy as np
 import hwtmode.statisticplot
+from hwtmode.data import decompose_circular_feature
+
 import scipy.ndimage.filters
 from sklearn.calibration import calibration_curve
 from sklearn import metrics
@@ -98,42 +100,111 @@ def get_optimizer(s, learning_rate = 0.001, **kwargs):
     return o
 
 
+def grab_predictors(args, idate, idir = '/glade/work/sobash/NSC_objects'):
+    model = args.model
+    twin = args.twin
+    rptdist = args.rptdist
+    time_space_windows = [(twin,rptdist)]
+    # Define ifiles, a list of input files from glob.glob method
+    if model == "HRRR":
+        if idate < pd.to_datetime("20191002"):
+            logging.error(f"No {model} before 20191002")
+            sys.exit(1)
+        if idate < pd.to_datetime("20201202"):
+            ifile = f'{idir}/HRRR_new/grid_data/grid_data_HRRRX_d01_{idate.strftime("%Y%m%d%H-%M%S")}.par'
+        else:
+            ifile = f'{idir}/HRRR_new/grid_data/grid_data_HRRR_d01_{idate.strftime("%Y%m%d%H-%M%S")}.par'
+    elif model.startswith("NSC"):
+        ifile = f'/glade/work/sobash/NSC_objects/grid_data_new/grid_data_{model}_d01_{idate.strftime("%Y%m%d%H-%M%S")}.par'
+        # remove largest neighborhood size (fields containing N7 in the name)
+    df = pd.read_parquet(ifile, engine="pyarrow")
+
+    # Index df and modeds the same way. 
+    logging.info(f"convert df Date to datetime64[ns]")
+    df["Date"] = df.Date.astype('datetime64[ns]')
+    df = df.rename(columns=dict(yind="y",xind="x",Date="initialization_time",fhr="forecast_hour"))
+    logging.info(f"derive valid_time from initialization_time + forecast_hour")
+    df["valid_time"] = pd.to_datetime(df["initialization_time"]) + df["forecast_hour"].astype(int) * dt.timedelta(hours=1)
+    df = df.set_index(["y","x","initialization_time","forecast_hour"])
+
+    # Derived fields
+    df["dayofyear"] = df["valid_time"].dt.dayofyear
+    df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15
+    df = decompose_circular_feature(df, "dayofyear", period=365.25)
+    df = decompose_circular_feature(df, "Local_Solar_Hour", period=24)
+    df = df.reset_index().set_index(["valid_time","y","x"])
+
+    if args.glm:
+        earliest_valid_time = df.index.get_level_values(level="valid_time").min()
+        latest_valid_time = df.index.get_level_values(level="valid_time").max()
+        assert latest_valid_time > pd.to_datetime("20160101"), "DataFrame completely before GLM exists"
+        glmds = get_glm(time_space_windows)
+        glmds = glmds.sel(valid_time = slice(earliest_valid_time,latest_valid_time)) # Trim GLM to time window of model data
+        logging.info(f"Merge flashes with {model} DataFrame")
+        # In glmds, x : west to east, y : south to north
+        # In sobash df, xind : south to north, yind : west to east.
+        glmds = glmds.rename(dict(x="y",y="x")) #dimensions are renamed to match sobash df.
+        df = df.merge(glmds.to_dataframe(), left_on=["valid_time","y","x"], right_on=["valid_time","y","x"])
+        #Do {model} and GLM overlap at all?"
+        assert not df.empty, f"Merged {model}/GLM Dataset is empty."
+        # Sanity check--make sure prediction model and GLM grid box lat lons are similar
+        assert (df.lon_y - df.lon_x).max() < 0.1, f"{model} and glm longitudes don't match"
+        assert (df.lat_y - df.lat_x).max() < 0.1, f"{model} and glm lats don't match"
+        df = df.drop(columns=["lon_y","lat_y"])
+        df = df.rename(columns=dict(lon_x="lon",lat_x="lat")) # helpful for scale factor pickle file.
+
+    return df
+
+
+
 def rptdist2bool(df, args):
     rptdist = args.rptdist
     twin = args.twin
     logging.debug(f"report distance {rptdist}km  time window {twin}h")
-    # get rid of columns that are associated with different time window (twin)
+    # get rid of storm report distance columns that are associated with different time window (twin)
     dropcol=[]
     for r in ["sighail", "sigwind", "hailone", "wind", "torn"]:
         for h in [0,1,2]:
             if h != twin:
                 dropcol.append(f"{r}_rptdist_{h}hr")
     df = df.drop(columns=dropcol)
-    # keep track of new Boolean column names
+
     rptcols = []
     for r in ["sighail", "sigwind", "hailone", "wind", "torn"]:
         rh = f"{r}_rptdist_{twin}hr"
         # Convert severe report distance to boolean (0-rptdist = True)
         df[rh] = (df[rh] >= 0) & (df[rh] < rptdist) # TODO: test speed with .loc[:,rh]. it seemed slower.
-        rptcols.append(rh)
+        # new Boolean column name with numeric dist threshold instead of numberless "rptdist".
+        newcol = f"{r}_{rptdist}km_{twin}hr"
+        df = df.rename(columns={rh:newcol}, errors="raise")
+        rptcols.append(newcol)
 
     # Any report
-    any_rpt_col = f"any_rptdist_{twin}hr"
-    hailwindtorn = [f"{r}_rptdist_{twin}hr" for r in ["hailone","wind","torn"]]
+    any_rpt_col = f"any_{rptdist}km_{twin}hr"
+    hailwindtorn = [f"{r}_{rptdist}km_{twin}hr" for r in ["hailone","wind","torn"]]
     df[any_rpt_col] = df[hailwindtorn].any(axis="columns")
     rptcols.append(any_rpt_col)
 
     # GLM?
     if args.glm:
-        logging.debug(f"at least {args.flash} flashes")
-        df["flashes"] = df["flashes"] >= args.flash
-        rptcols.append("flashes")
+        # Check if flash threshold is met in one space/time window.
+        # new flash variable name has space and time window in it.
+        flash_spacetime_win = f"flashes_{rptdist}km_{twin}hr"
+        logging.debug(f"at least {args.flash} flashes in {flash_spacetime_win}")
+        df[flash_spacetime_win] = df[flash_spacetime_win] >= args.flash
+        rptcols.append(flash_spacetime_win)
+        # Drop all the other "flash_" columns of various space/time windows.
+        dropcol = [x for x in df.columns if x.startswith("flash_") and x != flash_spacetime_win]
+        df = df.drop(columns=dropcol)
 
     return df, rptcols
 
-def get_glm(twin,rptdist,date=None):
-    assert twin == 2, "get_glm assumes time window is 2, not {twin}"
-    logging.info(f"load {twin}h {rptdist}km GLM")
+def get_glm(time_space_windows, date=None):
+    """
+    Convert distance to closest storm report to True/False based on distance and time thresholds 
+    And convert flash count to True/False based on distance, time, and flash threshold. 
+    """
+    
     if date:
         logging.info(f"date={date}")
         glmfiles = sorted(glob.glob(f"/glade/work/ahijevyc/GLM/{date.strftime('%Y%m%d')}*.glm.nc"))
@@ -149,18 +220,23 @@ def get_glm(twin,rptdist,date=None):
             glm = xarray.open_mfdataset(glmfiles, concat_dim="time_coverage_start", combine="nested")
 
     assert (glm.time_coverage_start[1] - glm.time_coverage_start[0]) == np.timedelta64(3600,'s'), 'glm.time_coverage_start interval not 1h'
-    logging.info("Add flashes from previous 2 times and next time to current time. 4-hour centered time window")
-    glm = glm + glm.shift(time_coverage_start=2) + glm.shift(time_coverage_start=1) + glm.shift(time_coverage_start=-1)
 
-    if rptdist != 40:
+    for twin, rptdist in time_space_windows:
+        newcol = f"flashes_{rptdist}km_{twin}hr"
+        logging.info(f"Sum flashes from -{twin} hours to +{twin-1} hour(s) to make {2*twin}-hour time-centered window. Store in new DataArray {newcol}")
+        glmsum = xarray.zeros_like(glm)
+        for time_shift in range(-twin, twin):
+            glmsum += glm.shift(time_coverage_start=-time_shift)
+
+    if rptdist > 40:
         k = int(rptdist/40)
         logging.warning(f"this is not correct. the window overlaps masked points")
         logging.warning(f"TODO: save GLM in non-masked form, or filter it from 40km to 120km while unmasked and making the GLM files.")
         logging.info(f"sum GLM flash counts in {k}x{k} window")
-        glm = glm.rolling(x=k, y=k, center=True).sum()
+        glmsum = glmsum.rolling(x=k, y=k, center=True).sum()
 
-    glm = glm.rename(dict(time_coverage_start="valid_time")) #, y="projection_y_coordinate", x="projection_x_coordinate")) # commented out Aug 10, 2022
-    return glm
+    glmsum = glmsum.rename(dict(time_coverage_start="valid_time",flashes=newcol))
+    return glmsum
 
 
 def print_scores(obs, fcst, label, desc="", n_bins=10, debug=False):
