@@ -8,15 +8,15 @@ fi
 
 
 i=0 # number each line of command file
-ncpus=8
-mem=120GB
+ncpus=7
+mem=130GB
 walltime=3:00:00
 
 # Loop through commands file one line at a time
 while read -r line
 do
 
-    if [[ $line == *"--model NSC3km-12sec"* ]]; then
+    if [[ $line == *"--model NSC"* ]]; then
         mem=60GB
         ncpus=5
         walltime=0:50:00
@@ -29,9 +29,8 @@ do
 #PBS -S /bin/csh
 #PBS -j oe
 #PBS -l walltime=$walltime
-#PBS -l gpu_type=v100
 #PBS -l select=1:ncpus=$ncpus:mem=$mem
-#PBS -o $i.test.out
+#PBS -o $i.dy.test.out
 #PBS -q casper
 
 cd /glade/work/ahijevyc/NSC_objects

@@ -8,7 +8,7 @@ fi
 
 
 i=0 # number each line of command file
-ncpus=8
+ncpus=7
 mem=130GB
 walltime=3:00:00
 
@@ -16,10 +16,10 @@ walltime=3:00:00
 while read -r line
 do
 
-    if [[ $line == *"--model NSC3km-12sec"* ]]; then
-        mem=60GB
-        ncpus=5
-        walltime=0:50:00
+    if [[ $line == *"--model NSC"* ]]; then
+        mem=70GB
+        ncpus=$ncpus
+        walltime=0:55:00
     fi
 
     cat <<EOS | qsub
