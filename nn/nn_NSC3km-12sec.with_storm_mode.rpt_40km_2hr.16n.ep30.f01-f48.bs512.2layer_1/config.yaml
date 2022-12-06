@@ -272,12 +272,12 @@ columns:
 - Local_Solar_Hour_sin
 - Local_Solar_Hour_cos
 labels:
-- sighail_rptdist_2hr
-- sigwind_rptdist_2hr
-- hailone_rptdist_2hr
-- wind_rptdist_2hr
-- torn_rptdist_2hr
-- any_rptdist_2hr
+- sighail_40km_2hr
+- sigwind_40km_2hr
+- hailone_40km_2hr
+- wind_40km_2hr
+- torn_40km_2hr
+- any_40km_2hr
 mean:
 - 23.5
 - 9.502172470092773
