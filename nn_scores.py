@@ -23,8 +23,10 @@ def parse_args():
     parser.add_argument('ifiles', nargs="+", type=argparse.FileType("r"), help="input file(s)")
     parser.add_argument("--ci", type=int, default=95, help="confidence interval. Show individual lines if ci=0")
     parser.add_argument("-d", "--debug", action="store_true", help="turn on debug mode")
+    parser.add_argument("--dpi", type=int, default=120, help="output resolution")
     parser.add_argument("--ensmean", action="store_true", help="ensemble mean")
     parser.add_argument("--mask", type=str, nargs="+", help="only show this(these) mask value(s)")
+    parser.add_argument("--n_boot", type=int, default=1000, help="number of bootstrap sammples")
     parser.add_argument("--nofineprint", action="store_true", help="no fine print (ci, time created, etc)")
     parser.add_argument("--nomembers", action="store_true", help="no members")
     parser.add_argument("--noplot", action="store_true", help="no plot, just print all-forecast hour means)")
@@ -40,8 +42,10 @@ def main():
     ifiles      = args.ifiles
     ci          = args.ci # default ci is 95
     debug       = args.debug
+    dpi         = args.dpi
     ensmean     = args.ensmean
     mask        = args.mask
+    n_boot      = args.n_boot
     nofineprint = args.nofineprint
     nomem       = args.nomembers
     noplot      = args.noplot
@@ -57,14 +61,14 @@ def main():
 
 
     # Figure dimensions, line thicknesses, text alignment
-    fig = plt.figure(figsize=(15,11))
+    fig = plt.figure(figsize=(13,9.5))
     text_kw = dict(fontsize=10, ha="left", va="center", clip_on=True) # clip_on in case variable is so low it squishes botax
     # If ci is zero, don't plot confidence band; plot individual lines for all members    
     if ci == 0:
         line_kw = dict(units="mem", estimator=None)
     else:
         # If ci is not zero plot ci% confidence interval
-        line_kw = dict(errorbar=('ci',95))
+        line_kw = dict(errorbar=('ci',95), n_boot=n_boot)
 
     line_kw.update(dict(hue="nn", style="nn"))
 
@@ -100,7 +104,7 @@ def main():
             # Empty fineprint_string placeholder for fine print in lower left corner of image.
             fineprint = plt.annotate(text="", xy=(0,-55), xycoords=('axes fraction','axes pixels'), va="top", fontsize=6, wrap=True)
             if not nofineprint:
-                fineprint.set_text(f"{ci}% confidence interval\ncreated {datetime.datetime.now()}")
+                fineprint.set_text(f"ci={ci}%  n_boot={n_boot}\ncreated {datetime.datetime.now()}")
 
             iens = df["mem"] == "ensmean.all"
             if not nomem:
@@ -137,7 +141,7 @@ def main():
                 topax.legend(handles, labels, title=prefix)
             ofile = f"{os.path.join(os.path.dirname(prefix),cl+os.path.basename(prefix))}.png"
             plt.tight_layout()
-            fig.savefig(ofile)
+            fig.savefig(ofile, dpi=dpi)
             logging.info(os.path.realpath(ofile))
             plt.clf()
 
