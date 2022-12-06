@@ -63,8 +63,8 @@ if not os.path.exists(odir):
 
 logging.info(f"Read {model} predictors")
 if model == "HRRR":
-    ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.par'
-    if debug: ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.fastdebug.par'
+    ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.par'
+    if debug: ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
     scalingfile = "/glade/work/ahijevyc/NSC_objects/HRRR/scaling_values_all_HRRRX.pk"
     nfhr = 48
 elif model == "NSC3km-12sec":

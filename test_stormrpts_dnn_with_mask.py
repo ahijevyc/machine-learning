@@ -110,9 +110,9 @@ if not os.path.exists(odir):
 logging.info(f"Read {model} predictors")
 if model == "HRRR":
     if ifile is None:
-        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.par'
+        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
     if debug:
-        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.fastdebug.par'
+        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
     nfhr = 48
 elif model.startswith("NSC"):
     if ifile is None:
