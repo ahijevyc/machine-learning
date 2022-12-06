@@ -115,7 +115,6 @@ def main():
     debug          = args.debug
     dropout        = args.dropout
     epochs         = args.epochs
-    flash          = args.flash
     fhr            = args.fhr
     fits           = args.fits
     folds          = args.folds
@@ -134,8 +133,6 @@ def main():
     trainend       = args.trainend
     trainstart     = args.trainstart
     suite          = args.suite
-    twin           = args.twin
-
 
     if debug:
         logging.basicConfig(level=logging.DEBUG)
@@ -173,9 +170,9 @@ def main():
 
     logging.info(f"Read {model} predictors. Use parquet file, if it exists. If it doesn't exist, create it.")
     if model == "HRRR":
-        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.par'
-        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.32bit.par'
-        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.32bit.fastdebug.par'
+        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.par'
+        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
+        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
     elif model.startswith("NSC"):
         ifile = f'{model}.par'
 
@@ -189,8 +186,9 @@ def main():
             if debug:
                 search_str = search_str.replace("*", "2006*") # just June 2020
             ifiles = glob.glob(search_str)
-            search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202*00-0000.par' # append HRRR to HRRRX.
-            ifiles.extend(glob.glob(search_str))
+            if not debug:
+                search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202*00-0000.par' # append HRRR to HRRRX.
+                ifiles.extend(glob.glob(search_str))
         elif model.startswith("NSC"):
             search_str = f'/glade/work/sobash/NSC_objects/grid_data_new/grid_data_{model}_d01_20*00-0000.par'
             if debug:
@@ -280,7 +278,9 @@ def main():
             earliest_valid_time = df.index.get_level_values(level="valid_time").min()
             latest_valid_time = df.index.get_level_values(level="valid_time").max()
             assert latest_valid_time > pd.to_datetime("20160101"), "DataFrame completely before GLM exists"
-            glmds = get_glm(twin, rptdist)
+            time_space_windows = [(2, 40), (1, 20)]
+            time_space_windows = [(2, 40)]
+            glmds = get_glm(time_space_windows) # twin, rptdist)
             glmds = glmds.sel(valid_time = slice(earliest_valid_time,latest_valid_time)) # Trim GLM to time window of model data
             logging.info(f"Merge flashes with {model} DataFrame")
             # In glmds, x : west to east, y : south to north
@@ -299,6 +299,7 @@ def main():
         df.to_parquet(ifile)
 
     # Convert distance to closest storm report to True/False based on distance and time thresholds 
+    # And convert flash count to True/False based on distance, time, and flash thresholds 
     df, rptcols = rptdist2bool(df, args)
 
     plotclimo=False
