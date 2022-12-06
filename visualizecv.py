@@ -2,6 +2,7 @@ import logging
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.colors import BoundaryNorm
 import pdb
 from sklearn.preprocessing import LabelEncoder
 cmap_data = plt.cm.Set2
