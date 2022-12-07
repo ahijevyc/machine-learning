@@ -221,22 +221,28 @@ def get_glm(time_space_windows, date=None):
 
     assert (glm.time_coverage_start[1] - glm.time_coverage_start[0]) == np.timedelta64(3600,'s'), 'glm.time_coverage_start interval not 1h'
 
+    # Initialize Dataset to hold GLM flash count for all space/time windows.
+    ds = xarray.Dataset()
     for twin, rptdist in time_space_windows:
+        if rptdist < 40:
+            logging.error("TODO: remake GLM with {rptdist}km grid")
+            sys.exit(1)
         newcol = f"flashes_{rptdist}km_{twin}hr"
         logging.info(f"Sum flashes from -{twin} hours to +{twin-1} hour(s) to make {2*twin}-hour time-centered window. Store in new DataArray {newcol}")
         glmsum = xarray.zeros_like(glm)
         for time_shift in range(-twin, twin):
             glmsum += glm.shift(time_coverage_start=-time_shift)
 
-    if rptdist > 40:
-        k = int(rptdist/40)
-        logging.warning(f"this is not correct. the window overlaps masked points")
-        logging.warning(f"TODO: save GLM in non-masked form, or filter it from 40km to 120km while unmasked and making the GLM files.")
-        logging.info(f"sum GLM flash counts in {k}x{k} window")
-        glmsum = glmsum.rolling(x=k, y=k, center=True).sum()
+        if rptdist > 40:
+            k = int(rptdist/40)
+            logging.warning(f"{rptdist}km glm distance threshold is not really available. Spatial window overlaps masked points")
+            logging.warning(f"TODO: save GLM in non-masked form, or filter it from 40km to 120km while unmasked and making the GLM files.")
+            logging.info(f"Despite reservations, continuing to sum GLM flash counts in rolling {k}x{k} window")
+            glmsum = glmsum.rolling(x=k, y=k, center=True).sum()
 
-    glmsum = glmsum.rename(dict(time_coverage_start="valid_time",flashes=newcol))
-    return glmsum
+        glmsum = glmsum.rename(dict(time_coverage_start="valid_time",flashes=newcol))
+        ds = ds.assign(variables=glmsum)
+    return ds
 
 
 def print_scores(obs, fcst, label, desc="", n_bins=10, debug=False):
@@ -443,7 +449,7 @@ def savedmodel_default(args, fhr_str=None):
         batchnorm_str = ""
 
     glmstr = "" # GLM description 
-    if args.glm: glmstr = f"{args.flash}flash_{args.twin}hr." # flash rate threshold and GLM time window
+    if args.glm: glmstr = f"{args.flash}flash." # flash rate threshold and GLM time window
         
     savedmodel  = f"{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{args.neurons[0]}n.ep{args.epochs}.{fhr_str}."
     savedmodel += f"bs{args.batchsize}.{args.layers}layer.{optimizer._name}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
