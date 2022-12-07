@@ -167,8 +167,7 @@ def main():
         xs = G211.xs
         ys = G211.ys
 
-
-    logging.info(f"Read {model} predictors. Use parquet file, if it exists. If it doesn't exist, create it.")
+    # Define input filename.
     if model == "HRRR":
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.par'
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
@@ -176,35 +175,37 @@ def main():
     elif model.startswith("NSC"):
         ifile = f'{model}.par'
 
+    logging.info(f"Read {model} predictors. Use parquet file {ifile}, if it exists. If it doesn't exist, create it.")
     if os.path.exists(ifile):
         logging.info(f'reading {ifile}')
         df = pd.read_parquet(ifile, engine="pyarrow")
     else:
         # Define ifiles, a list of input files from glob.glob method
         if model == "HRRR":
-            search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRRX_d01_20*00-0000.par' # just 00z 
+            search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRRX_d01_20*00-0000.par' # HRRRX = experimental HRRR (v4)
             if debug:
                 search_str = search_str.replace("*", "2006*") # just June 2020
-            ifiles = glob.glob(search_str)
-            if not debug:
-                search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202*00-0000.par' # append HRRR to HRRRX.
-                ifiles.extend(glob.glob(search_str))
+            else:
+                # append HRRR to HRRRX.
+                # HRRR prior to Dec 3 2020 is v3 and HRRR at Dec 3 2020 and afterwards is v4.
+                search_str += ' /glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_2020120[3-9]*-0000.par' # Dec 3-9, 2020
+                search_str += ' /glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202012[1-3]*-0000.par' # Dec 10-31, 2020
+                search_str += ' /glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202[1-9]*-0000.par' # 2021+
+            logging.info(f"ifiles search string {search_str}")
+            ifiles = []
+            for x in search_str.split(" "):
+                ifiles.extend(glob.glob(x))
         elif model.startswith("NSC"):
             search_str = f'/glade/work/sobash/NSC_objects/grid_data_new/grid_data_{model}_d01_20*00-0000.par'
             if debug:
                 search_str = f'/glade/work/sobash/NSC_objects/grid_data_new/grid_data_{model}_d01_201504*00-0000.par' # smaller subset for debugging
             ifiles = glob.glob(search_str)
 
-        # remove largest neighborhood size (fields containing N7 in the name)
-        df = pd.read_parquet(ifiles[0], engine="pyarrow")
-        columns2read = df.columns
-        N7_columns = [x for x in df.columns if "-N7" in x]
-        logging.info(f"ignoring {len(N7_columns)} N7 columns: {N7_columns}")
-        columns2read = set(df.columns) - set(N7_columns)
+        # Used to drop 7x7 neighborhood variables but for some reason it messed up the read_parquet step, not finding the "LTG2" or 
+        # LTGS5T5 when doing HRRRXHRRR.
 
-        # Read list of columns columns2read (includes severe reports)
-        logging.info(f"Reading {len(ifiles)} {model} files {search_str}")
-        df = pd.concat( pd.read_parquet(ifile, engine="pyarrow", columns=columns2read) for ifile in ifiles) # pd.read_parquet only handles one file at a time, so pd.concat
+        logging.info(f"Reading {len(ifiles)} {model} files")
+        df = pd.concat( pd.read_parquet(ifile, engine="pyarrow") for ifile in ifiles) # pd.read_parquet only handles one file at a time, so pd.concat
 
         # Index df and modeds the same way. 
         logging.info(f"convert df Date to datetime64[ns]")
@@ -278,8 +279,7 @@ def main():
             earliest_valid_time = df.index.get_level_values(level="valid_time").min()
             latest_valid_time = df.index.get_level_values(level="valid_time").max()
             assert latest_valid_time > pd.to_datetime("20160101"), "DataFrame completely before GLM exists"
-            time_space_windows = [(2, 40), (1, 20)]
-            time_space_windows = [(2, 40)]
+            time_space_windows = [ (1,40), (2,40) ]
             glmds = get_glm(time_space_windows) # twin, rptdist)
             glmds = glmds.sel(valid_time = slice(earliest_valid_time,latest_valid_time)) # Trim GLM to time window of model data
             logging.info(f"Merge flashes with {model} DataFrame")
