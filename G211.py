@@ -27,9 +27,9 @@ def x2():
     """
     Half spacing (40km) compared to G211 (80km)
     """
-    global width, height, projected_corners
-    width=width*2
-    height=height*2
+    global projected_corners
+    width=93 * 2
+    height=65 * 2
 
     xs = np.linspace( projected_corners[0, 0], projected_corners[1, 0], width)
     ys = np.linspace( projected_corners[0, 1], projected_corners[1, 1], height)
