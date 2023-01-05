@@ -103,6 +103,7 @@ def main():
     parser.add_argument('--fhr', nargs="+", type=int, default=list(range(1,49)), help="forecast hour")
     parser.add_argument('--fits', nargs="+", type=int, default=None, help="work on specific fit(s) so you can run many in parallel")
     parser.add_argument('--folds', nargs="+", type=int, default=None, help="work on specific fold(s) so you can run many in parallel")
+    parser.add_argument('--ifile', type=str, help="Read this input parquet file. Otherwise will guess.")
     parser.add_argument('--seed', type=int, default=None, help="random number seed for reproducability")
 
     args = parser.parse_args()
@@ -119,6 +120,7 @@ def main():
     fits           = args.fits
     folds          = args.folds
     glm            = args.glm
+    ifile          = args.ifile
     kfold          = args.kfold
     layer          = args.layers
     learning_rate  = args.learning_rate
@@ -168,12 +170,13 @@ def main():
         ys = G211.ys
 
     # Define input filename.
-    if model == "HRRR":
-        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.par'
-        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
-        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
-    elif model.startswith("NSC"):
-        ifile = f'{model}.par'
+    if ifile is None:
+        if model == "HRRR":
+            ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.par'
+            ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
+            if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
+        elif model.startswith("NSC"):
+            ifile = f'{model}.par'
 
     logging.info(f"Read {model} predictors. Use parquet file {ifile}, if it exists. If it doesn't exist, create it.")
     if os.path.exists(ifile):
