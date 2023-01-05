@@ -158,6 +158,11 @@ def grab_predictors(args, idate, idir = '/glade/work/sobash/NSC_objects'):
 
 
 def rptdist2bool(df, args):
+    """
+    Convert distance to closest storm report to True/False based on distance and time thresholds 
+    And convert flash count to True/False based on distance, time, and flash threshold. 
+    """
+    
     rptdist = args.rptdist
     twin = args.twin
     logging.debug(f"report distance {rptdist}km  time window {twin}h")
@@ -200,30 +205,35 @@ def rptdist2bool(df, args):
     return df, rptcols
 
 def get_glm(time_space_windows, date=None):
-    """
-    Convert distance to closest storm report to True/False based on distance and time thresholds 
-    And convert flash count to True/False based on distance, time, and flash threshold. 
-    """
-    
-    if date:
-        logging.info(f"date={date}")
-        glmfiles = sorted(glob.glob(f"/glade/work/ahijevyc/GLM/{date.strftime('%Y%m%d')}*.glm.nc"))
-        glm = xarray.open_mfdataset(glmfiles, concat_dim="time_coverage_start", combine="nested")
-    else:
-        oneGLMfile = True
-        if oneGLMfile:
-            glm = xarray.open_dataset("/glade/scratch/ahijevyc/temp/GLM_all.nc")
-        else:
-            glmfiles = sorted(glob.glob("/glade/work/ahijevyc/GLM/2*.glm.nc"))
-            #glmtimes = [dt.datetime.strptime(os.path.basename(x), "%Y%m%d%H.glm.nc") for x in glmfiles] # why is this here?
-            logging.info("open_mfdataset")
-            glm = xarray.open_mfdataset(glmfiles, concat_dim="time_coverage_start", combine="nested")
-
-    assert (glm.time_coverage_start[1] - glm.time_coverage_start[0]) == np.timedelta64(3600,'s'), 'glm.time_coverage_start interval not 1h'
-
     # Initialize Dataset to hold GLM flash count for all space/time windows.
     ds = xarray.Dataset()
     for twin, rptdist in time_space_windows:
+        suffix = ".glm.nc"
+        if rptdist == 20:
+            suffix = ".glm.40km.nc"
+        if date:
+            logging.info(f"date={date}")
+            glmfiles = sorted(glob.glob(f"/glade/work/ahijevyc/GLM/{date.strftime('%Y%m%d')}*{suffix}"))
+            glm = xarray.open_mfdataset(glmfiles, concat_dim="time_coverage_start", combine="nested")
+        else:
+            oneGLMfile = True
+            if oneGLMfile:
+                ifile = f"/glade/scratch/ahijevyc/temp/all{suffix}"
+                if os.path.exists(ifile):
+                    glm = xarray.open_dataset(ifile)
+                else:
+                    logging.error(f"{ifile} does not exist. run ncrcat on GLM files")
+                    logging.error(f"cd /glade/work/ahijevyc/GLM")
+                    logging.error(f"ls 20??/*{suffix} > filelist")
+                    logging.error(f"cat filelist|ncrcat --fl_lst_in {ifile}")
+                    sys.exit(1)
+            else:
+                glmfiles = sorted(glob.glob("/glade/work/ahijevyc/GLM/2*{suffix}"))
+                logging.info("open_mfdataset")
+                glm = xarray.open_mfdataset(glmfiles, concat_dim="time_coverage_start", combine="nested")
+
+        assert (glm.time_coverage_start[1] - glm.time_coverage_start[0]) == np.timedelta64(3600,'s'), 'glm.time_coverage_start interval not 1h'
+
         if rptdist < 40:
             logging.error("TODO: remake GLM with {rptdist}km grid")
             sys.exit(1)
@@ -331,7 +341,7 @@ def get_features(args, subset=None):
         # 'REFL_COM-N3T5', 'UP_HELI_MIN-N5T1', 'MLCINH-N5T5', 'MLCINH-N3T5', 'UP_HELI_MIN-N3T5', 'MLCINH-N5T3', 'LR75-N3T1', 'HAILCAST_DIAM_MAX-N5T5', 
         # 'HAILCAST_DIAM_MAX-N3T5', 'UP_HELI_MIN-N3T3', 'MLCINH-N5T1', 'LR75-N5T3', 'LR75-N3T3', 'UP_HELI_MIN-N3T1', 'LR75-N3T5', 'MLCINH-N3T3'}
 
-        features = open(f"suite/{args.model}.{args.suite}.txt","r").read().splitlines() # Hopefully these somewhat alphabetically-sorted lists are easier to spot mistakes in.
+        features = open(f"suite_predictors/{args.model}.{args.suite}.txt","r").read().splitlines() # Hopefully these somewhat alphabetically-sorted lists are easier to spot mistakes in.
        
     else:
         logging.error("Can't get feature suite for unexpected model {model}")
