@@ -31,8 +31,7 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 
 parser = get_argparser()
-parser.add_argument('--ifile', type=argparse.FileType("r"), 
-                    help="parquet input file")
+parser.add_argument('--ifile', type=str, help="parquet input file")
 parser.add_argument('--nprocs', type=int, default=0,
                     help="verify this many forecast hours in parallel")
 
@@ -342,7 +341,7 @@ def statjob(fhr, statcurves=None):
                            fill=False, plabel=False)
             fig.suptitle(f"{suite} {rpt_type}")
             fig.text(0.5, 0.01, ' '.join(df.columns), wrap=True, fontsize=5)
-            ofile = f"nn/{thissavedmodel}.{rpt_type}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.png"
+            ofile = f"nn/statcurves/{thissavedmodel}.{rpt_type}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.png"
             fig.savefig(ofile)
             logging.info(os.path.realpath(ofile))
             plt.clf()

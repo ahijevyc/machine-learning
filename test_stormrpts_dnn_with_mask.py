@@ -382,7 +382,7 @@ def statjob(fhr, statcurves=None):
                          ' '.join(features.columns),
                          wrap=True,
                          fontsize=5)
-                ofile = f"nn/{thissavedmodel}.{rpt_type}.{mask}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.png"
+                ofile = f"nn/statcurves/{thissavedmodel}.{rpt_type}.{mask}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.png"
                 fig.savefig(ofile)
                 logging.info(os.path.realpath(ofile))
                 plt.clf()

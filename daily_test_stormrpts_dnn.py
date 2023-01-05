@@ -215,11 +215,7 @@ else:
     cvsplit = [([], np.arange(len(df)))]
 
 
-def statjob(fhr, statcurves=None):
-    if statcurves is None:
-        statcurves = fhr == "all"
-    if statcurves:
-        fig = plt.figure(figsize=(10, 7))
+def statjob(fhr):
     # this_fhr for all cases, not just one fold
     if fhr == "all":
         this_fhr = ~df["forecast_hour"].isna()  # all finite forecast hours
