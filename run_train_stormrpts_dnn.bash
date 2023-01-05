@@ -19,6 +19,7 @@ echo read command file $cmdfile
 
 mem=140GB
 walltime=1:30:00
+gpu=""
 
 # Loop through commands file one line at a time
 # enumerate the cmd lines starting with zero
@@ -26,8 +27,8 @@ i=0
 while read -r line
 do
     if [[ $line == *"--model NSC"* ]]; then
-        mem=70GB
-        walltime=0:20:00
+        mem=80GB
+        walltime=1:40:00
     fi
     # GPU is faster for large n-neuron model.
     # Tried each fold separately for less memory on GPU, but still not able to fit.
@@ -44,7 +45,7 @@ do
 #PBS -S /bin/csh
 #PBS -j oe
 #PBS -l walltime=$walltime
-#PBS -l select=1:ncpus=1:mem=$mem
+#PBS -l select=1:ncpus=1${gpu}:mem=$mem
 #PBS -o $i.$fit.$fold.out
 #PBS -q casper
 
