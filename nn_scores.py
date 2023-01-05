@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument("-d", "--debug", action="store_true", help="turn on debug mode")
     parser.add_argument("--dpi", type=int, default=120, help="output resolution")
     parser.add_argument("--ensmean", action="store_true", help="ensemble mean")
+    parser.add_argument("--lw", type=float, default=2, help="line width")
     parser.add_argument("--mask", type=str, nargs="+", help="only show this(these) mask value(s)")
     parser.add_argument("--n_boot", type=int, default=1000, help="number of bootstrap sammples")
     parser.add_argument("--nofineprint", action="store_true", help="no fine print (ci, time created, etc)")
@@ -44,6 +45,7 @@ def main():
     debug       = args.debug
     dpi         = args.dpi
     ensmean     = args.ensmean
+    lw          = args.lw
     mask        = args.mask
     n_boot      = args.n_boot
     nofineprint = args.nofineprint
@@ -61,7 +63,7 @@ def main():
 
 
     # Figure dimensions, line thicknesses, text alignment
-    fig = plt.figure(figsize=(13,9.5))
+    fig = plt.figure(figsize=(11,8.5))
     text_kw = dict(fontsize=10, ha="left", va="center", clip_on=True) # clip_on in case variable is so low it squishes botax
     # If ci is zero, don't plot confidence band; plot individual lines for all members    
     if ci == 0:
@@ -70,7 +72,7 @@ def main():
         # If ci is not zero plot ci% confidence interval
         line_kw = dict(errorbar=('ci',95), n_boot=n_boot)
 
-    line_kw.update(dict(hue="nn", style="nn"))
+    line_kw.update(dict(hue="nn", style="nn", lw=lw))
 
     logging.info(f"Read {len(ifiles)} input files into Pandas DataFrame, with new nn column equal to input filename")
     dfs = pd.concat([pd.read_csv(ifile,header=0).assign(nn=nns(ifile.name)) for ifile in ifiles], ignore_index=True) # ignore index or get duplicate indices
@@ -111,9 +113,10 @@ def main():
                 sns.lineplot(data=df[~iens], x="fhr", y=variable,  ax=topax, **line_kw)
             if ensmean:
                 logging.info("ensemble mean")
-                sns.lineplot(data=df[iens], x="fhr", y=variable,  ax=topax, **line_kw, legend=nomem)
-                for i,row in df[iens & (df.fhr == df.fhr.max())].iterrows():
-                    topax.text(df.fhr.max(), row[variable], "ens. mean", **text_kw)
+                lp = sns.lineplot(data=df[iens], x="fhr", y=variable,  ax=topax, **line_kw, legend=nomem)
+                for line in lp.get_lines(): # print "ens. mean" at end of line
+                    if line.get_xydata().size: # some lines are empty
+                        topax.text(*line.get_xydata()[-1], "ens. mean", **text_kw)
                 topax.set_xlim(topax.get_xlim()[0], topax.get_xlim()[1]+1.2) # add space for "ensmean" label
 
             # Base rate
@@ -138,7 +141,7 @@ def main():
                 topax.legend(handles, labels, ncol=2, fontsize=7, labelspacing=0.45, columnspacing=1, title=prefix,
                         handlelength=3, title_fontsize=8) #default handlelength=2. to see entire cycle of long patterns
             else:
-                topax.legend(handles, labels, title=prefix)
+                topax.legend(handles, labels, fontsize=8, title=prefix)
             ofile = f"{os.path.join(os.path.dirname(prefix),cl+'.'+os.path.basename(prefix))}.png"
             plt.tight_layout()
             fig.savefig(ofile, dpi=dpi)
