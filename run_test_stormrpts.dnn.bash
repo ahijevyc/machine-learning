@@ -8,10 +8,11 @@ fi
 
 
 i=0 # number each line of command file
-ncpus=7
-mem=130GB
-walltime=3:00:00
+ncpus=5
+mem=135GB
+walltime=4:00:00
 
+echo read $cmdfile
 # Loop through commands file one line at a time
 while read -r line
 do
