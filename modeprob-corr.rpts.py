@@ -23,6 +23,7 @@ logging.info(args)
 clobber               = args.clobber
 debug                 = args.debug
 glm                   = args.glm
+ifile                 = args.ifile
 kfold                 = args.kfold
 model                 = args.model
 nfit                  = args.nfits
@@ -63,22 +64,25 @@ if not os.path.exists(odir):
 
 logging.info(f"Read {model} predictors")
 if model == "HRRR":
-    ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.par'
-    if debug: ifile0 = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
-    scalingfile = "/glade/work/ahijevyc/NSC_objects/HRRR/scaling_values_all_HRRRX.pk"
+    if ifile is None:
+        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.par'
+    if debug:
+        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
     nfhr = 48
-elif model == "NSC3km-12sec":
-    ifile0 = f'{model}.par'
-    scalingfile = f"scaling_values_{model}_{teststart:%Y%m%d_%H%M}.pk"
+elif model.startswith("NSC"):
+    if ifile is None:
+        ifile = f'{model}.par'
+    if debug:
+        ifile = f'/glade/work/ahijevyc/NSC_objects/fastdebug.par'
     nfhr = 36
 
 
-if os.path.exists(ifile0):
-    logging.info(f'reading {ifile0}')
-    df = pd.read_parquet(ifile0, engine="pyarrow")
+if os.path.exists(ifile):
+    logging.info(f'reading {ifile}')
+    df = pd.read_parquet(ifile, engine="pyarrow")
 else:
     logging.error(f"why is there no parquet file for {model}?")
-    logging.error(f"Do you need to run train_stormrpts_dnn.py to make {ifile0}?")
+    logging.error(f"Do you need to run train_stormrpts_dnn.py to make {ifile}?")
     sys.exit(1)
 
 df, rptcols = rptdist2bool(df, args)

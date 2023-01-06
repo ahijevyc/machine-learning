@@ -31,7 +31,6 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 
 parser = get_argparser()
-parser.add_argument('--ifile', type=str, help="parquet input file")
 parser.add_argument('--nprocs', type=int, default=0,
                     help="verify this many forecast hours in parallel")
 

@@ -70,6 +70,7 @@ def get_argparser():
     parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
     parser.add_argument('--flash', type=int, default=10, help="GLM flash count threshold")
     parser.add_argument('--kfold', type=int, default=5, help="apply kfold cross validation to training set")
+    parser.add_argument('--ifile', type=str, help="Read this parquet input file. Otherwise guess which one to read.")
     parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="learning rate")
     parser.add_argument('--model', type=str, choices=["HRRR","NSC1km","NSC3km-12sec","NSC15km"], default="HRRR", help="prediction model")

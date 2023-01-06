@@ -103,7 +103,6 @@ def main():
     parser.add_argument('--fhr', nargs="+", type=int, default=list(range(1,49)), help="forecast hour")
     parser.add_argument('--fits', nargs="+", type=int, default=None, help="work on specific fit(s) so you can run many in parallel")
     parser.add_argument('--folds', nargs="+", type=int, default=None, help="work on specific fold(s) so you can run many in parallel")
-    parser.add_argument('--ifile', type=str, help="Read this input parquet file. Otherwise will guess.")
     parser.add_argument('--seed', type=int, default=None, help="random number seed for reproducability")
 
     args = parser.parse_args()
