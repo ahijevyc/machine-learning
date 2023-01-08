@@ -396,7 +396,7 @@ def main():
         if not fits: # if user did not ask for specific fits, assume fits range from 0 to nfit-1.
             fits = range(0,nfit)
         for i in fits:
-            model_i = f"nn/nn_{savedmodel}_{i}/{kfold}fold{ifold}"
+            model_i = f"{savedmodel}_{i}/{kfold}fold{ifold}"
             if not clobber and os.path.exists(model_i) and os.path.exists(f"{model_i}/config.yaml"):
                 logging.info(f"{model_i} exists")
             else:

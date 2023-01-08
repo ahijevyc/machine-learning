@@ -39,7 +39,7 @@ def brier_skill_score(obs, preds):
 
 
 def configs_match(ylargs, args):
-    # Make sure training time range doesn't overlap test range
+    # Warn if trimmed training period and requested test periods overlap.
     trainstart = getattr(ylargs,"trainstart")
     trainend   = getattr(ylargs,"trainend")
     teststart = args.teststart
@@ -48,8 +48,12 @@ def configs_match(ylargs, args):
     if overlap >= dt.timedelta(hours=0) and args.kfold == 1:
         logging.warning(f"training and testing time ranges overlap {trainstart}-{trainend}|{teststart}-{testend}")
    
-    # Comparing config.yaml training bounds and requested training bounds (args) is not a good test because config.yaml bounds are "actual" training set bounds, which may be 
-    # shorter than the requested bounds. 
+    # Comparing config.yaml training period and requested training period (args) is not a good test because config.yaml bounds are "trimmed"
+    # to actual training data. config.yaml training period may be subset of the requested training period in args.
+    # If any of the actual "trimmed" training period is outside the requested training period, this is a problem.
+    # args.trainstart <= trainstart            trainend <= args.trainend
+    assert args.trainstart <= trainstart, f"Requested training period {args.trainstart}-{args.trainend} starts after actual 'trimmed' training period {trainstart}-{trainend} starts"
+    assert trainend <= args.trainend,     f"Requested training period {args.trainstart}-{args.trainend} ends before actual 'trimmed' training period {trainstart}-{trainend} ends"
     for key in ["batchnorm", "batchsize", "debug", "dropout", "epochs", "flash", "glm", "kfold", "layers", "learning_rate", "model", "neurons",
                 "optimizer", "reg_penalty", "rptdist", "suite", "twin"]:
         assert getattr(ylargs, key) == getattr(
@@ -88,6 +92,30 @@ def get_argparser():
     parser.add_argument('--twin', type=int, default=2, help="time window in hours")
     return parser
 
+
+def full_cmd(args):
+    """
+    Given a argparse Namespace, return complete argument string suitable for shell command line.
+    Format datetimes as strings.
+    Just print keyword if its value is Boolean and True.
+    Skip keyword and value if its value is Boolean and False.
+    Skip keyword and value if value is None.
+    Remove brackets from lists.
+    """
+    s = " ".join(args._get_args())
+    for kw,value in args._get_kwargs():
+        if isinstance(value, dt.datetime):
+            value = value.strftime("%Y%m%dT%H%M")
+        if isinstance(value, bool):
+            if not value:
+                continue
+            value = ""
+        if isinstance(value, list):
+            value = " ".join([str(i) for i in value])
+        if value is None:
+            continue
+        s += f" --{kw} {value}"
+    return s + "\n"
 
 def get_optimizer(s, learning_rate = 0.001, **kwargs):
     if s == 'adam':
@@ -450,8 +478,8 @@ def normalize_multivariate_data(data, features, scaling_values=None, nonormalize
     return normed_data, scaling_values
 
 
-def savedmodel_default(args, fhr_str=None):
-    # Could be 'adam' or SGD from Sobash 2020
+def savedmodel_default(args, fhr_str=None, odir="nn"):
+    # optimizer could be 'adam' or SGD from Sobash 2020
     optimizer = get_optimizer(args.optimizer)
     
     if args.batchnorm:
@@ -462,7 +490,7 @@ def savedmodel_default(args, fhr_str=None):
     glmstr = "" # GLM description 
     if args.glm: glmstr = f"{args.flash}flash." # flash rate threshold and GLM time window
         
-    savedmodel  = f"{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{args.neurons[0]}n.ep{args.epochs}.{fhr_str}."
+    savedmodel  = f"{odir}/nn_{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{args.neurons[0]}n.ep{args.epochs}.{fhr_str}."
     savedmodel += f"bs{args.batchsize}.{args.layers}layer.{optimizer._name}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
         
     return savedmodel

@@ -8,17 +8,22 @@ This script searches for models in the list that have not been created.
 import argparse
 import glob
 import logging
-from ml_functions import get_argparser, savedmodel_default
+from ml_functions import full_cmd, get_argparser, savedmodel_default
 import os
 import pdb
 import sys
 from train_stormrpts_dnn import make_fhr_str
 
-if len(sys.argv) == 2:
+if len(sys.argv) >= 2:
     ifile = sys.argv[1]
 else:
     ifile = "cmds.txt"
 cmds = open(ifile,"r").readlines()
+
+odir = "nn"
+# subdirectory like nn/hyperparam_search.HRRR
+if len(sys.argv) >= 3:
+    odir = sys.argv[2]
 
 fhr = list(range(1,49))
 
@@ -27,14 +32,16 @@ if os.path.exists(c):
     logging.warning(f"removing {c}")
     os.remove(c)
 
+
+
 for cmd in cmds:
     words = cmd.split()
     parser = get_argparser()
     args = parser.parse_args(cmd.split())
-    savedmodel = savedmodel_default(args, fhr_str=make_fhr_str(fhr))
+    savedmodel = savedmodel_default(args, fhr_str=make_fhr_str(fhr), odir=odir)
     teststart = args.teststart.strftime('%Y%m%d%H')
     testend = args.testend.strftime('%Y%m%d%H')
-    scores = f"nn/nn_{savedmodel}.{args.kfold}fold.{teststart}-{testend}scores.txt"
+    scores = f"{savedmodel}.{args.kfold}fold.{teststart}-{testend}scores.txt"
     search_str = scores.replace(f"{teststart}-{testend}","*")
     score_files = glob.glob(search_str)
     missing = False
@@ -43,14 +50,21 @@ for cmd in cmds:
     elif len(score_files) > 1:
         logging.warning(f"found {len(score_files)} score files matching {search_str}")
     else:
-        logging.error(f"No score file for {search_str}")
+        logging.error(f"No matches for {search_str}")
         missing = True
     for i in range(args.nfits):
         for ifold in range(args.kfold):
-            model_i = f"nn/nn_{savedmodel}_{i}/{args.kfold}fold{ifold}"
-            if not os.path.exists(model_i) or not os.path.exists(f"{model_i}/config.yaml"):
+            model_i = f"{savedmodel}_{i}/{args.kfold}fold{ifold}"
+            if os.path.exists(model_i) and os.path.exists(f"{model_i}/config.yaml"):
+                logging.debug(f"found {model_i} and config.yaml")
+                # Initialize savedmodel. I think it is usually None. This helps
+                # remember the odir for the test_stormrpts_dnn.py script.
+                setattr(args, "savedmodel", savedmodel)
+            else:
+                logging.error(f"No {model_i} or no config.yaml")
                 missing = True
     if missing:
         f = open(c, "a")
-        f.write(cmd)
+        complete_cmd = full_cmd(args)
+        f.write(complete_cmd)
         f.close()

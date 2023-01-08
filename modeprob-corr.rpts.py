@@ -45,10 +45,10 @@ logging.info(f"savedmodel={savedmodel}")
 
 for ifold in range(kfold):
     for i in range(0,nfit):
-        savedmodel_i = f"nn/nn_{savedmodel}_{i}/{kfold}fold{ifold}"
+        savedmodel_i = f"{savedmodel}_{i}/{kfold}fold{ifold}"
         assert os.path.exists(savedmodel_i), f"{savedmodel_i} not found"
 
-    nextfit = f"nn/nn_{savedmodel}_{i+1}"
+    nextfit = f"{savedmodel}_{i+1}"
     if os.path.exists(nextfit):
         logging.warning(f"next fit exists ({nextfit}). Are you sure nfit only {nfit}?")
 

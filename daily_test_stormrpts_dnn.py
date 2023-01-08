@@ -69,10 +69,10 @@ logging.info(f"savedmodel={savedmodel}")
 
 for ifold in range(kfold):
     for i in range(0, nfit):
-        savedmodel_i = f"nn/nn_{savedmodel}_{i}/{kfold}fold{ifold}"
+        savedmodel_i = f"{savedmodel}_{i}/{kfold}fold{ifold}"
         assert os.path.exists(savedmodel_i), f"{savedmodel_i} not found"
 
-    nextfit = f"nn/nn_{savedmodel}_{i+1}"
+    nextfit = f"{savedmodel}_{i+1}"
     if os.path.exists(nextfit):
         logging.warning(
             f"next fit exists ({nextfit}). Are you sure nfit only {nfit}?")
@@ -170,7 +170,7 @@ itimes = df.index.get_level_values(level="initialization_time")
 teststart = itimes.min()
 testend = itimes.max()
 ofile = os.path.realpath(
-    f"nn/nn_{savedmodel}.{kfold}fold.{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}dailyscores.txt")
+    f"{savedmodel}.{kfold}fold.{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}dailyscores.txt")
 if not clobber and os.path.exists(ofile):
     logging.info(
         f"Exiting because output file {ofile} exists. Use --clobber option to override.")
@@ -234,7 +234,7 @@ def statjob(fhr):
         labels_fold_fhr = labels_fold[this_fold_fhr]
 
         for thisfit in range(nfit):
-            savedmodel_thisfitfold = f"nn/nn_{savedmodel}_{thisfit}/{kfold}fold{ifold}"
+            savedmodel_thisfitfold = f"{savedmodel}_{thisfit}/{kfold}fold{ifold}"
             logging.debug(f"checking {savedmodel_thisfitfold} column order")
             # yaml.Loader is not safe (yaml.FullLoader is) but legacy Loader handles argparse.namespace object.
             yl = yaml.load(open(
