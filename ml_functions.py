@@ -490,7 +490,7 @@ def savedmodel_default(args, fhr_str=None, odir="nn"):
     glmstr = "" # GLM description 
     if args.glm: glmstr = f"{args.flash}flash." # flash rate threshold and GLM time window
         
-    savedmodel  = f"{odir}/nn_{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{args.neurons[0]}n.ep{args.epochs}.{fhr_str}."
+    savedmodel  = f"{odir}/{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{args.neurons[0]}n.ep{args.epochs}.{fhr_str}."
     savedmodel += f"bs{args.batchsize}.{args.layers}layer.{optimizer._name}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
         
     return savedmodel
