@@ -72,6 +72,7 @@ def get_argparser():
     parser.add_argument("--dropout", type=float, default=0., help='fraction of neurons to drop in each hidden layer (0-1)')
     parser.add_argument('--nfits', type=int, default=5, help="number of times to fit (train) model")
     parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
+    parser.add_argument('--fhr', nargs="+", type=int, default=list(range(1,49)), help="forecast hours")
     parser.add_argument('--flash', type=int, default=10, help="GLM flash count threshold")
     parser.add_argument('--kfold', type=int, default=5, help="apply kfold cross validation to training set")
     parser.add_argument('--ifile', type=str, help="Read this parquet input file. Otherwise guess which one to read.")
