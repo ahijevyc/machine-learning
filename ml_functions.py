@@ -54,10 +54,10 @@ def configs_match(ylargs, args):
     # args.trainstart <= trainstart            trainend <= args.trainend
     assert args.trainstart <= trainstart, f"Requested training period {args.trainstart}-{args.trainend} starts after actual 'trimmed' training period {trainstart}-{trainend} starts"
     assert trainend <= args.trainend,     f"Requested training period {args.trainstart}-{args.trainend} ends before actual 'trimmed' training period {trainstart}-{trainend} ends"
-    for key in ["batchnorm", "batchsize", "debug", "dropout", "epochs", "flash", "glm", "kfold", "layers", "learning_rate", "model", "neurons",
+    for key in ["batchnorm", "batchsize", "debug", "dropout", "epochs", "flash", "fhr", "glm", "kfold", "layers", "learning_rate", "model", "neurons",
                 "optimizer", "reg_penalty", "rptdist", "suite", "twin"]:
         assert getattr(ylargs, key) == getattr(
-            args, key), f'this script {key} {getattr(args,key)} does not match yaml {key} {getattr(ylargs,key)}'
+            args, key), f'requested {key} {getattr(args,key)} does not match savedmodel yaml {key} {getattr(ylargs,key)}'
 
     return True
 
