@@ -63,8 +63,7 @@ if debug:
 if savedmodel:
     pass
 else:
-    # use model trained on f01-f48 regardless of the hour you are testing
-    savedmodel = savedmodel_default(args, fhr_str='f01-f48')
+    savedmodel = savedmodel_default(args)
 logging.info(f"savedmodel={savedmodel}")
 
 for ifold in range(kfold):

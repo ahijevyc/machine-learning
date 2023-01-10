@@ -80,8 +80,7 @@ if debug:
 if savedmodel:
     pass
 else:
-    # use model trained on f01-f48 regardless of the hour you are testing
-    savedmodel = savedmodel_default(args, fhr_str='f01-f48')
+    savedmodel = savedmodel_default(args)
 logging.info(f"savedmodel={savedmodel}")
 
 for ifold in range(kfold):
@@ -224,10 +223,10 @@ df.info()
 
 
 labels_sum = df.xs("label",axis=1,level="ctype").groupby(level="mask").sum()
+assert labels_sum.all().all() > 0, "at least 1 class has no True labels in testing set"
 labels_sum
 
 
-assert labels_sum.all().all() > 0, "at least 1 class has no True labels in testing set"
 
 before_filtering = len(df.columns)
 # Keep column if it is a feature of this suite or a label.
@@ -240,7 +239,7 @@ logging.info(f"keeping {len(df.columns)}/{before_filtering} predictors")
 if kfold > 1:
     cv = KFold(n_splits=kfold)
     # Convert generator to list. You don't want a generator. 
-    # Generator depletes after first run of statjob, and if run serially, next time statjob is executed the entire fold loop is skipped. 
+    # Generator depletes after first run of statjob, and if run serially, next time statjob is executed the entire fold loop is skipped.
     cvsplit = list(cv.split(df))
 else:
     # Emulate a 1-split KFold object with all cases in test split.
@@ -410,9 +409,9 @@ else:
     for fhr in fhrs:
         data.append(statjob(fhr))
 
-
 with open(ofile, "w") as fh:
     fh.write('class,mem,fold,fhr,mask,bss,base rate,auc,aps,n\n')
     fh.write(''.join(data))
 
 logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")
+

@@ -83,7 +83,7 @@ def main():
         if mask is not None:
             dfs = dfs[dfs["mask"].isin(mask)]
 
-    # Append fold to mem and drop fold
+    # Append fold to mem and drop fold column.
     dfs["mem"] = dfs["mem"] + "." + dfs["fold"]
     dfs = dfs.drop(columns="fold")
 
@@ -137,11 +137,14 @@ def main():
                 topax.set_ylim(bottom=ymin)
 
             handles, labels = topax.get_legend_handles_labels()
+            fontsize = 7
+            if len(prefix) > 100:
+                fontsize=6
             if len(handles) > 8:
-                topax.legend(handles, labels, ncol=2, fontsize=7, labelspacing=0.45, columnspacing=1, title=prefix,
-                        handlelength=3, title_fontsize=8) #default handlelength=2. to see entire cycle of long patterns
+                topax.legend(handles, labels, ncol=2, fontsize=fontsize, labelspacing=0.45, columnspacing=1, title=prefix,
+                        handlelength=3, title_fontsize=fontsize*1.1) #default handlelength=2. to see entire cycle of long patterns
             else:
-                topax.legend(handles, labels, fontsize=8, title=prefix)
+                topax.legend(handles, labels, fontsize=fontsize, title=prefix, title_fontsize=fontsize*1.1)
             ofile = f"{os.path.join(os.path.dirname(prefix),cl+'.'+os.path.basename(prefix))}.png"
             plt.tight_layout()
             fig.savefig(ofile, dpi=dpi)

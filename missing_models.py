@@ -12,7 +12,6 @@ from ml_functions import full_cmd, get_argparser, savedmodel_default
 import os
 import pdb
 import sys
-from train_stormrpts_dnn import make_fhr_str
 
 if len(sys.argv) >= 2:
     ifile = sys.argv[1]
@@ -25,8 +24,6 @@ odir = "nn"
 if len(sys.argv) >= 3:
     odir = sys.argv[2]
 
-fhr = list(range(1,49))
-
 c = f"missing_model_cmds.txt"
 if os.path.exists(c):
     logging.warning(f"removing {c}")
@@ -38,7 +35,7 @@ for cmd in cmds:
     words = cmd.split()
     parser = get_argparser()
     args = parser.parse_args(cmd.split())
-    savedmodel = savedmodel_default(args, fhr_str=make_fhr_str(fhr), odir=odir)
+    savedmodel = savedmodel_default(args, odir=odir)
     teststart = args.teststart.strftime('%Y%m%d%H')
     testend = args.testend.strftime('%Y%m%d%H')
     scores = f"{savedmodel}.{args.kfold}fold.{teststart}-{testend}scores.txt"

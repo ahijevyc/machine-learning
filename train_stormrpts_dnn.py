@@ -5,7 +5,7 @@ import glob
 from hwtmode.data import decompose_circular_feature
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, get_argparser, get_features, get_glm, get_optimizer, rptdist2bool, savedmodel_default
+from ml_functions import brier_skill_score, get_argparser, get_features, get_glm, get_optimizer, make_fhr_str, rptdist2bool, savedmodel_default
 import numpy as np
 import os
 import pandas as pd
@@ -58,41 +58,6 @@ def modedate(modeprob_files, model_dates):
             logging.debug(f"ignoring modeprob file {itime}. no matching model file")
     logging.info(f"Kept {len(filtered_ifiles)}/{started_with} mode prob files")
     return filtered_ifiles
-
-
-
-def f0i(i):
-    return f"f{i:02d}"
-
-def make_fhr_str(fhr):
-    fhr.sort()
-    seq = []
-    final = []
-    last = 0
-
-    for index, val in enumerate(fhr):
-
-        if last + 1 == val or index == 0:
-            seq.append(val)
-            last = val
-        else:
-            if len(seq) > 1:
-               final.append(f0i(seq[0]) + '-' + f0i(seq[len(seq)-1]))
-            else:
-               final.append(f0i(seq[0]))
-            seq = []
-            seq.append(val)
-            last = val
-
-        if index == len(fhr) - 1:
-            if len(seq) > 1:
-                final.append(f0i(seq[0]) + '-' + f0i(seq[len(seq)-1]))
-            else:
-                final.append(f0i(seq[0]))
-
-   
-    final_str = '.'.join(map(str, final))
-    return final_str
 
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
@@ -151,7 +116,7 @@ def main():
     if savedmodel:
         pass
     else:
-        savedmodel = savedmodel_default(args, fhr_str=make_fhr_str(fhr)) # abbreviate list of forecast hours with hyphens (where possible) so model name is not too long for tf. 
+        savedmodel = savedmodel_default(args)
     logging.info(f"savedmodel={savedmodel}")
 
     ##################################
@@ -255,7 +220,8 @@ def main():
             logging.info(f"mode prob dimensions now {modeds.dims}")
 
             logging.info(f"merge {model} DataFrame with mode Dataset in xarray")
-            # slash df fhrs to match modeds. modeds has fhr 12-35. Why? It is faster but would be nice to keep forecast hours 1-11. 
+            # slash df fhrs to match modeds. modeds has fhr 12-35. Why? Because that is what the hand-labeled dataset was restricted to.
+            # It is faster but would be nice to keep forecast hours 1-11. Oh well.
             # df = df.sort_index(level=[0,1,2,3]).loc[(slice(None),slice(None),slice(None),slice(12,35))]
             # Tried join="left" but it ignored all the modeds columns. Tried "inner" but it ignored df fhrs 1-11 and 36.
             ds = df.to_xarray().merge(modeds, join="outer", compat="override") #  override to ignore the lat/lon mismatch (assumed small)
@@ -332,12 +298,18 @@ def main():
 
     before_filtering = len(df)
     # Used to test all columns for NA, but we only care about the feature subset being complete. 
-    # For example, mode probs are not avaiable for fhr=2 but we don't need to drop fhr=2 if
+    # For example, mode probs are not available for fhr=2 but we don't need to drop fhr=2 if
     # the other features are complete. 
     features = get_features(args)
     logging.info(f"Retain rows where all {len(features)} requested features are present")
     df = df.loc[df[features].notna().all(axis="columns"),:]
     logging.info(f"kept {len(df)}/{before_filtering} cases with no NA features")
+
+
+    before_filtering = len(df)
+    logging.info(f"Retain rows with requested forecast hours {fhr}")
+    df = df.loc[df["forecast_hour"].isin(fhr)]
+    logging.info(f"kept {len(df)}/{before_filtering} rows with requested forecast hours")
 
 
     logging.info(f"Split {len(rptcols)} labels away from predictors")

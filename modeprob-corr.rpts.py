@@ -39,7 +39,7 @@ if debug:
 
 ### saved model name ###
 if savedmodel is None:
-    savedmodel = savedmodel_default(args, fhr_str='f01-f48') # use model trained on f01-f48 regardless of the hour you are testing
+    savedmodel = savedmodel_default(args)
 logging.info(f"savedmodel={savedmodel}")
 
 

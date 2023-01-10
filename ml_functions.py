@@ -381,6 +381,39 @@ def get_features(args, subset=None):
 
     return features
 
+
+def make_fhr_str(fhr):
+    # abbreviate list of forecast hours with hyphens (where possible) so model name is not too long for tf.
+    fhr.sort()
+    seq = []
+    final = []
+    last = 0
+
+    for index, val in enumerate(fhr):
+
+        if last + 1 == val or index == 0:
+            seq.append(val)
+            last = val
+        else:
+            if len(seq) > 1:
+                final.append(f"f{seq[0]:02d}-f{seq[len(seq)-1]:02d}")
+            else:
+                final.append(f"f{seq[0]:02d}")
+            seq = []
+            seq.append(val)
+            last = val
+
+        if index == len(fhr) - 1:
+            if len(seq) > 1:
+                final.append(f"f{seq[0]:02d}-f{seq[len(seq)-1]:02d}")
+            else:
+                final.append(f"f{seq[0]:02d}")
+
+   
+    final_str = '.'.join(map(str, final))
+    return final_str
+
+
 def read_csv_files(sdate, edate, dataset, members=[str(x) for x in range(1,11)], columns=None):
     # read in all CSV files for 1km forecasts
     all_files = []
@@ -478,10 +511,12 @@ def normalize_multivariate_data(data, features, scaling_values=None, nonormalize
     return normed_data, scaling_values
 
 
-def savedmodel_default(args, fhr_str=None, odir="nn"):
+def savedmodel_default(args, odir="nn"):
     # optimizer could be 'adam' or SGD from Sobash 2020
     optimizer = get_optimizer(args.optimizer)
-    
+   
+    fhr_str = make_fhr_str(args.fhr)
+
     if args.batchnorm:
         batchnorm_str = ".bn"
     else:
