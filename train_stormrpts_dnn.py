@@ -65,7 +65,6 @@ def main():
     import pandas as pd # started getting UnboundLocalError: local variable 'pd' referenced before assignment Mar 1 2022 even though I import pandas above
 
     parser = get_argparser()
-    parser.add_argument('--fhr', nargs="+", type=int, default=list(range(1,49)), help="forecast hour")
     parser.add_argument('--fits', nargs="+", type=int, default=None, help="work on specific fit(s) so you can run many in parallel")
     parser.add_argument('--folds', nargs="+", type=int, default=None, help="work on specific fold(s) so you can run many in parallel")
     parser.add_argument('--seed', type=int, default=None, help="random number seed for reproducability")
