@@ -20,17 +20,18 @@ train_stormrpts_dnn.py
 usage: train_stormrpts_dnn.py [-h] [--batchnorm] [--batchsize BATCHSIZE]
                               [--clobber] [-d] [--dropout DROPOUT]
                               [--nfits NFITS] [--epochs EPOCHS]
-                              [--flash FLASH] [--kfold KFOLD]
+                              [--fhr FHR [FHR ...]] [--flash FLASH]
+                              [--kfold KFOLD] [--ifile IFILE]
                               [--layers LAYERS]
                               [--learning_rate LEARNING_RATE]
-                              [--model {HRRR,NSC3km-12sec}] [--glm]
-                              [--neurons NEURONS [NEURONS ...]]
+                              [--model {HRRR,NSC1km,NSC3km-12sec,NSC15km}]
+                              [--glm] [--neurons NEURONS [NEURONS ...]]
                               [--optimizer {adam,sgd}]
                               [--reg_penalty REG_PENALTY] [--rptdist RPTDIST]
-                              [--savedmodel SAVEDMODEL]
+                              [--savedmodel SAVEDMODEL] [--trainend TRAINEND]
+                              [--trainstart TRAINSTART] [--testend TESTEND]
                               [--teststart TESTSTART] [--suite SUITE]
-                              [--twin TWIN] [--fhr FHR [FHR ...]]
-                              [--fits FITS [FITS ...]]
+                              [--twin TWIN] [--fits FITS [FITS ...]]
                               [--folds FOLDS [FOLDS ...]] [--seed SEED]
 
 train/test dense neural network
@@ -47,13 +48,19 @@ optional arguments:
                         (default: 0.0)
   --nfits NFITS         number of times to fit (train) model (default: 5)
   --epochs EPOCHS       number of training epochs (default: 30)
+  --fhr FHR [FHR ...]   forecast hours (default: [1, 2, 3, 4, 5, 6, 7, 8, 9,
+                        10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+                        23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
+                        36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48])
   --flash FLASH         GLM flash count threshold (default: 10)
   --kfold KFOLD         apply kfold cross validation to training set (default:
                         5)
+  --ifile IFILE         Read this parquet input file. Otherwise guess which
+                        one to read. (default: None)
   --layers LAYERS       number of hidden layers (default: 2)
   --learning_rate LEARNING_RATE
                         learning rate (default: 0.001)
-  --model {HRRR,NSC3km-12sec}
+  --model {HRRR,NSC1km,NSC3km-12sec,NSC15km}
                         prediction model (default: HRRR)
   --glm                 Use GLM (default: False)
   --neurons NEURONS [NEURONS ...]
@@ -65,15 +72,14 @@ optional arguments:
   --rptdist RPTDIST     severe weather report max distance (default: 40)
   --savedmodel SAVEDMODEL
                         filename of machine learning model (default: None)
+  --trainend TRAINEND   training set end (default: None)
+  --trainstart TRAINSTART
+                        training set start (default: None)
+  --testend TESTEND     testing set end (default: 20220101T00)
   --teststart TESTSTART
-                        train with storms before this time; test this time and
-                        after (default: 202012021200)
+                        testing set start (default: 20201202T12)
   --suite SUITE         name for suite of training features (default: default)
   --twin TWIN           time window in hours (default: 2)
-  --fhr FHR [FHR ...]   forecast hour (default: [1, 2, 3, 4, 5, 6, 7, 8, 9,
-                        10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-                        23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
-                        36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48])
   --fits FITS [FITS ...]
                         work on specific fit(s) so you can run many in
                         parallel (default: None)
@@ -90,16 +96,18 @@ test_stormrpts_dnn.py
 ```
 usage: test_stormrpts_dnn.py [-h] [--batchnorm] [--batchsize BATCHSIZE]
                              [--clobber] [-d] [--dropout DROPOUT]
-                             [--nfits NFITS] [--epochs EPOCHS] [--flash FLASH]
-                             [--kfold KFOLD] [--layers LAYERS]
+                             [--nfits NFITS] [--epochs EPOCHS]
+                             [--fhr FHR [FHR ...]] [--flash FLASH]
+                             [--kfold KFOLD] [--ifile IFILE] [--layers LAYERS]
                              [--learning_rate LEARNING_RATE]
-                             [--model {HRRR,NSC3km-12sec}] [--glm]
-                             [--neurons NEURONS [NEURONS ...]]
+                             [--model {HRRR,NSC1km,NSC3km-12sec,NSC15km}]
+                             [--glm] [--neurons NEURONS [NEURONS ...]]
                              [--optimizer {adam,sgd}]
                              [--reg_penalty REG_PENALTY] [--rptdist RPTDIST]
-                             [--savedmodel SAVEDMODEL] [--teststart TESTSTART]
-                             [--suite SUITE] [--twin TWIN] [--ifile IFILE]
-                             [--nprocs NPROCS]
+                             [--savedmodel SAVEDMODEL] [--trainend TRAINEND]
+                             [--trainstart TRAINSTART] [--testend TESTEND]
+                             [--teststart TESTSTART] [--suite SUITE]
+                             [--twin TWIN] [--nprocs NPROCS]
 
 train/test dense neural network
 
@@ -115,13 +123,19 @@ optional arguments:
                         (default: 0.0)
   --nfits NFITS         number of times to fit (train) model (default: 5)
   --epochs EPOCHS       number of training epochs (default: 30)
+  --fhr FHR [FHR ...]   forecast hours (default: [1, 2, 3, 4, 5, 6, 7, 8, 9,
+                        10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+                        23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
+                        36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48])
   --flash FLASH         GLM flash count threshold (default: 10)
   --kfold KFOLD         apply kfold cross validation to training set (default:
                         5)
+  --ifile IFILE         Read this parquet input file. Otherwise guess which
+                        one to read. (default: None)
   --layers LAYERS       number of hidden layers (default: 2)
   --learning_rate LEARNING_RATE
                         learning rate (default: 0.001)
-  --model {HRRR,NSC3km-12sec}
+  --model {HRRR,NSC1km,NSC3km-12sec,NSC15km}
                         prediction model (default: HRRR)
   --glm                 Use GLM (default: False)
   --neurons NEURONS [NEURONS ...]
@@ -133,12 +147,14 @@ optional arguments:
   --rptdist RPTDIST     severe weather report max distance (default: 40)
   --savedmodel SAVEDMODEL
                         filename of machine learning model (default: None)
+  --trainend TRAINEND   training set end (default: None)
+  --trainstart TRAINSTART
+                        training set start (default: None)
+  --testend TESTEND     testing set end (default: 20220101T00)
   --teststart TESTSTART
-                        train with storms before this time; test this time and
-                        after (default: 202012021200)
+                        testing set start (default: 20201202T12)
   --suite SUITE         name for suite of training features (default: default)
   --twin TWIN           time window in hours (default: 2)
-  --ifile IFILE         parquet input file (default: None)
   --nprocs NPROCS       verify this many forecast hours in parallel (default:
                         0)
 ```
