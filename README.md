@@ -144,6 +144,34 @@ optional arguments:
 ```
 
 ### history notes
+
+#### Jan 2023
+
+##### clean up
+
+Cleaned up nn/ directory by moving hyperparameter search models to nn/hyperparam_search.HRRR/.
+
+Removed nn_ prefix from saved model names.
+
+##### NSC training period changed
+
+The old time range of 3-km NSC was 20101024 - 20191020.
+
+Now with 1-km and 15-km NSC data, and redone 3-km NSC data, the model initialization
+time range tightens to 20101024 - 20170330.
+With the old 2019 end time, it made sense to partition training and 
+testing data into two ranges with 20160701 as the divider. That had 1+ years in the testing set.
+Now that we stop at 20170330, it makes more sense to use an earlier partition, 20160101. 
+Old models trained through 20160701 and tested through 2019 are in a subdirectory nn/trainend20160701.NSC/.
+
+##### correct forecast hour range
+
+Corrected fhr list going forward, both in config.yaml and output filenames. It was hard-coded to 
+f01-f48 for a long time. That worked for HRRR. But NSC only goes to fhr=36. And if you want to train with 
+storm mode, it is limited to f12-f36. 
+
+#### Dec 2021
+
 accidentally deleted all important .py scripts (except HWT_mode_train.py) by adding them to git
 and removing .git directory. I was trying to change branch from master to main.
 
