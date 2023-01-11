@@ -140,6 +140,7 @@ def main():
             if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
         elif model.startswith("NSC"):
             ifile = f'{model}.par'
+            if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}_old.par'
 
     logging.info(f"Read {model} predictors. Use parquet file {ifile}, if it exists. If it doesn't exist, create it.")
     if os.path.exists(ifile):
@@ -164,7 +165,7 @@ def main():
         elif model.startswith("NSC"):
             search_str = f'/glade/work/sobash/NSC_objects/grid_data_new/grid_data_{model}_d01_20*00-0000.par'
             if debug:
-                search_str = f'/glade/work/sobash/NSC_objects/grid_data_new/grid_data_{model}_d01_201504*00-0000.par' # smaller subset for debugging
+                search_str = search_str.replace("grid_data_new","grid_data") # old dataset for debugging
             ifiles = glob.glob(search_str)
 
         # Used to drop 7x7 neighborhood variables but for some reason it messed up the read_parquet step, not finding the "LTG2" or 

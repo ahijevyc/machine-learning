@@ -145,7 +145,7 @@ def main():
                         handlelength=3, title_fontsize=fontsize*1.1) #default handlelength=2. to see entire cycle of long patterns
             else:
                 topax.legend(handles, labels, fontsize=fontsize, title=prefix, title_fontsize=fontsize*1.1)
-            ofile = f"{os.path.join(os.path.dirname(prefix),cl+'.'+os.path.basename(prefix))}.png"
+            ofile = f"{os.path.join(os.getenv('TMPDIR'),os.path.dirname(prefix),cl+'.'+os.path.basename(prefix))}.png"
             plt.tight_layout()
             fig.savefig(ofile, dpi=dpi)
             logging.info(os.path.realpath(ofile))

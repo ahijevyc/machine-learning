@@ -154,7 +154,9 @@ showing improvement with storm mode for tornado forecasts have no corresponding 
 - nn_NSC3km-12sec.with_CNN_DNN_storm_mode_nprob.rpt_40km_2hr.1024n.ep10.f01-f48.bs1024.1layer.SGD.L20.01.lr0.01.0.0.1fold.scores.txt
 
 Trained new models with same hypterparameters but they showed no improvement with storm mode. Previous results could have
-been a code bug (e.g. training and testing set time periods, forecast hour range), small sample size (noise), or amended variables in the 3-km training set (W_MIN, UP_HELI_MIN time sin/cos component variables), or a longer training and testing period.
+been a code bug (e.g. training and testing set time periods, forecast hour range), small sample size (noise), 
+buggy variables in the 3-km training set (W_DN_MAX, W_DN_MIN, yearly and daily time sin/cos components), fewer training variables 
+(LR75, MLCINH, REFL_COM, UP_HELI_MIN), or a longer training and testing period.
 
 ##### NSC training period changed
 
