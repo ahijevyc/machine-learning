@@ -165,7 +165,7 @@ optional arguments:
 
 ##### clean up
 
-Cleaned up nn/ directory by moving hyperparameter search models to nn/hyperparam_search.HRRR/.
+Cleaned up nn/ directory by moving 250+ hyperparameter search models to nn/hyperparam_search.HRRR/.
 
 Models trained in particular regions masked by convective mode probability moved to nn/modemask.NSC/.
 
