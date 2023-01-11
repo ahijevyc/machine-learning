@@ -72,7 +72,10 @@ def get_argparser():
     parser.add_argument("--dropout", type=float, default=0., help='fraction of neurons to drop in each hidden layer (0-1)')
     parser.add_argument('--nfits', type=int, default=5, help="number of times to fit (train) model")
     parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
-    parser.add_argument('--fhr', nargs="+", type=int, default=list(range(1,49)), help="forecast hours")
+    parser.add_argument('--fhr', nargs="+", type=int, default=list(range(1,49)), help="train with these forecast hours. Testing scripts only use this list to verify correct model "
+                                                                                      "for testing; no filter applied to testing data. In other words you "
+                                                                                      "test on all forecast hours in the testing data, regardless of whether the model was "
+                                                                                      "trained with the same forecast hours.")
     parser.add_argument('--flash', type=int, default=10, help="GLM flash count threshold")
     parser.add_argument('--kfold', type=int, default=5, help="apply kfold cross validation to training set")
     parser.add_argument('--ifile', type=str, help="Read this parquet input file. Otherwise guess which one to read.")
@@ -125,8 +128,7 @@ def get_optimizer(s, learning_rate = 0.001, **kwargs):
         #learning_rate = 0.001 # from sobash
         momentum = 0.99
         nesterov = True
-        decay = 1e-4 # no place to specify in optimizers.SGD, v2 of tensorflow
-        o = optimizers.SGD(learning_rate=learning_rate, momentum=momentum, decay=decay, nesterov=nesterov, **kwargs)
+        o = optimizers.SGD(learning_rate=learning_rate, momentum=momentum, nesterov=nesterov, **kwargs)
     return o
 
 
@@ -527,6 +529,6 @@ def savedmodel_default(args, odir="nn"):
     if args.glm: glmstr = f"{args.flash}flash." # flash rate threshold and GLM time window
         
     savedmodel  = f"{odir}/{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{args.neurons[0]}n.ep{args.epochs}.{fhr_str}."
-    savedmodel += f"bs{args.batchsize}.{args.layers}layer.{optimizer._name}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
+    savedmodel += f"bs{args.batchsize}.{args.layers}layer.{optimizer.name}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
         
     return savedmodel
