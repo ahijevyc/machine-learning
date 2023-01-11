@@ -62,7 +62,7 @@ def modedate(modeprob_files, model_dates):
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 def main():
-    import pandas as pd # started getting UnboundLocalError: local variable 'pd' referenced before assignment Mar 1 2022 even though I import pandas above
+    #import pandas as pd # started getting UnboundLocalError: local variable 'pd' referenced before assignment Mar 1 2022 even though I import pandas above
 
     parser = get_argparser()
     parser.add_argument('--fits', nargs="+", type=int, default=None, help="work on specific fit(s) so you can run many in parallel")
