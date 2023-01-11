@@ -167,7 +167,20 @@ optional arguments:
 
 Cleaned up nn/ directory by moving hyperparameter search models to nn/hyperparam_search.HRRR/.
 
+Models trained in particular regions masked by convective mode probability moved to nn/modemask.NSC/.
+
 Removed nn_ prefix from saved model names.
+
+##### orphan scores.txt files
+
+scores.txt files with no corresponding ML model tucked away in nn/orphan_score_files/. Unfortunately score.txt files
+showing improvement with storm mode for tornado forecasts have no corresponding model. 
+
+> NSC3km-12sec.default.rpt_40km_2hr.1024n.ep10.f01-f48.bs1024.1layer.SGD.L20.01.lr0.01.0.0.1fold.scores.txt
+> nn_NSC3km-12sec.with_CNN_DNN_storm_mode_nprob.rpt_40km_2hr.1024n.ep10.f01-f48.bs1024.1layer.SGD.L20.01.lr0.01.0.0.1fold.scores.txt
+
+Retrained a model with same parameters but it shows no improvement with storm mode. Could be a bug, small sample size (noise) or  
+difference in 3-km training set (fixed W_MIN, UP_HELI_MIN time sin/cos component variables, shorter end time)
 
 ##### NSC training period changed
 
