@@ -36,7 +36,7 @@ do
 cd /glade/work/ahijevyc/NSC_objects
 
 module load conda # if you need conda environment.
-conda activate tf
+conda activate tf2
 
 python daily_test_stormrpts_dnn.py --nprocs $ncpus $line
 EOS

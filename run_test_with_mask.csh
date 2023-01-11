@@ -17,7 +17,7 @@ foreach suite (with_CNN_DNN_storm_mode_prob)
 #PBS -q casper
 
 module load conda
-conda activate tf
+conda activate tf2
 
 python test_stormrpts_dnn_with_mask.py $field $thresh --suite $suite --nproc $nproc --neurons 1024 --layers 1 --optim sgd --learning_rate 0.01 --dropout 0 --epoch 10 --model NSC3km-12sec --splittime 20160701 --kfold 1
 EOS

@@ -52,7 +52,7 @@ do
 cd /glade/work/ahijevyc/NSC_objects
 
 module load conda # if you need conda environment.
-conda activate tf
+conda activate tf2
 
 python train_stormrpts_dnn.py --fits $fit --folds $fold $line 
 EOS
