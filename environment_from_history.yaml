@@ -1,22 +1,18 @@
-name: tf
+name: tf2
 channels:
   - conda-forge
   - defaults
 dependencies:
-  - scikit-plot
-  - pandas
-  - python
-  - netcdf4
-  - dask
-  - cartopy
-  - fastparquet
-  - pyarrow
-  - numpy
   - tqdm
+  - numpy
+  - pandas
+  - netcdf4
+  - cartopy
+  - dask
+  - ipywidgets
   - tensorflow
   - scikit-image
-  - s3fs
+  - pyarrow
+  - scikit-plot
   - geopandas
-  - tensorflow-probability
-  - ipywidgets
-prefix: /glade/u/home/ahijevyc/miniconda3/envs/tf
+prefix: /glade/u/home/ahijevyc/miniconda3/envs/tf2
