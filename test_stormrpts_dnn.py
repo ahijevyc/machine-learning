@@ -300,7 +300,6 @@ def statjob(fhr, statcurves=None):
     ]).mean()
     assert "fit" not in ensmean.index.names, "fit should not be a MultiIndex level of ensmean, the average probability over nfits."
     # for statistic curves plot file name
-    thissavedmodel = savedmodel.replace('f01-f48', f'f{fhr}')
     logging.debug(f"getting ensmean bss, base rate, auc, aps, n")
     for rpt_type in labels.columns:
         y_pred = ensmean[rpt_type]
@@ -331,7 +330,7 @@ def statjob(fhr, statcurves=None):
                            fill=False, plabel=False)
             fig.suptitle(f"{suite} {rpt_type}")
             fig.text(0.5, 0.01, ' '.join(df.columns), wrap=True, fontsize=5)
-            ofile = f"{thissavedmodel}.{rpt_type}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.png"
+            ofile = f"{thissavedmodel}.{rpt_type}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.f{fhr}.png"
             fig.savefig(ofile)
             logging.info(os.path.realpath(ofile))
             plt.clf()
