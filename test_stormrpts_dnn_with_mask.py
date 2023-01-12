@@ -2,9 +2,9 @@
 # coding: utf-8
 
 # ### test neural network(s) in parallel. output truth and predictions from each member and ensemble mean for each forecast hour
-#  
+#
 # ### Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
-#  
+#
 # ### execcasper --ngpus 13 --mem=50GB # gpus not neeeded for verification
 
 import argparse
@@ -46,7 +46,7 @@ parser.add_argument('thresh', type=float,
                     help="field threshold (less than this / greater than or equal to this)")
 
 
-#args = parser.parse_args(args="DNN_1_Supercell_nprob 0.05 --neurons 1024 --nprocs 5 --layers 1 --optimizer sgd --learning_rate 0.01 --dropout 0 --epochs 10 --model NSC3km-12sec --teststart 20160701 --kfold 1 --suite default".split())
+# args = parser.parse_args(args="DNN_1_Supercell_nprob 0.05 --neurons 1024 --nprocs 5 --layers 1 --optimizer sgd --learning_rate 0.01 --dropout 0 --epochs 10 --model NSC3km-12sec --teststart 20160701 --kfold 1 --suite default".split())
 args = parser.parse_args()
 logging.info(args)
 
@@ -105,10 +105,12 @@ if not os.path.exists(odir):
 if ifile is None:
     if model == "HRRR":
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
-        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
+        if debug:
+            ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
     elif model.startswith("NSC"):
         ifile = f'{model}.par'
-        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}_old.par'
+        if debug:
+            ifile = f'/glade/work/ahijevyc/NSC_objects/{model}_old.par'
 
 logging.info(f"Read {model} predictors from {ifile}")
 if os.path.exists(ifile):
@@ -165,7 +167,8 @@ ctype[df.columns.isin(rptcols)] = "label"
 
 # TODO: add "unused" for predictors that are in the parquet file but not the predictor suite.
 
-df.columns = pd.MultiIndex.from_arrays([df.columns, ctype], names=["name","ctype"])
+df.columns = pd.MultiIndex.from_arrays(
+    [df.columns, ctype], names=["name", "ctype"])
 
 
 validtimes = df.index.get_level_values(level="valid_time")
@@ -197,40 +200,40 @@ if not clobber and os.path.exists(ofile):
 logging.info(f"output file will be {ofile}")
 
 before_filtering = len(df)
-# Used to test all columns for NA, but we only care about the feature subset being complete. 
+# Used to test all columns for NA, but we only care about the feature subset being complete.
 # For example, mode probs are not avaiable for fhr=2 but we don't need to drop fhr=2 if
-# the other features are complete. 
+# the other features are complete.
 features = get_features(args)
-logging.info(f"Retain rows where all {len(features)} requested features are present")
-df = df.loc[df[features].notna().all(axis="columns"),:]
+logging.info(
+    f"Retain rows where all {len(features)} requested features are present")
+df = df.loc[df[features].notna().all(axis="columns"), :]
 logging.info(f"kept {len(df)}/{before_filtering} cases with no NA features")
 
 logging.info("Define mask and append to index")
 
-mask = pd.Series(np.select([df[(field,"feature")] >= thresh], [f"{field}>={thresh*100}%"], f"{field}<{thresh*100}%"), name="mask") # Mask is a string like DNN_1_Supercell>=10%
+mask = pd.Series(np.select([df[(field, "feature")] >= thresh], [
+                 f"{field}>={thresh*100}%"], f"{field}<{thresh*100}%"), name="mask")  # Mask is a string like DNN_1_Supercell>=10%
 df = df.set_index(mask, append=True)
 
 df.info()
 
 
-
-labels_sum = df.xs("label",axis=1,level="ctype").groupby(level="mask").sum()
+labels_sum = df.xs("label", axis=1, level="ctype").groupby(level="mask").sum()
 assert labels_sum.all().all() > 0, "at least 1 class has no True labels in testing set"
 labels_sum
 
 
-
 before_filtering = len(df.columns)
 # Keep column if it is a feature of this suite or a label.
-tokeep = [x for x in df.columns if x[0] in get_features(args) or x[1] == "label"]
+tokeep = [x for x in df.columns if x[0]
+          in get_features(args) or x[1] == "label"]
 df = df[tokeep]
 logging.info(f"keeping {len(df.columns)}/{before_filtering} predictors")
 
 
-
 if kfold > 1:
     cv = KFold(n_splits=kfold)
-    # Convert generator to list. You don't want a generator. 
+    # Convert generator to list. You don't want a generator.
     # Generator depletes after first run of statjob, and if run serially, next time statjob is executed the entire fold loop is skipped.
     cvsplit = list(cv.split(df))
 else:
@@ -282,7 +285,8 @@ def statjob(fhr, statcurves=None):
                 yl_labels == labels.columns
             ), f"labels {labels.columns} don't match when model was trained {yl_labels}"
 
-            sv = pd.DataFrame(yl).set_index("columns").T # scaling values DataFrame as from .describe()
+            # scaling values DataFrame as from .describe()
+            sv = pd.DataFrame(yl).set_index("columns").T
             if sv.columns.size != features.columns.size:
                 logging.error(
                     f"size of yaml and features columns differ {sv.columns} {features.columns}"
@@ -326,7 +330,7 @@ def statjob(fhr, statcurves=None):
             # prepend "fold" level
             Y = pd.concat([Y], keys=[ifold], names=["fold"])
             # concatenate this fit/fold to the y_preds DataFrame
-            y_preds = pd.concat([y_preds,Y], axis="index")
+            y_preds = pd.concat([y_preds, Y], axis="index")
     # I may have overlapping valid_times from different init_times like fhr=1 from today and fhr=25 from previous day
     # average probability over all nfits initialized at initialization_time and valid at valid_time
     ensmean = y_preds.groupby(level=[
@@ -383,14 +387,14 @@ if debug:
     sys.exit(0)
 
 # allow for datasets like storm mode probabilities, that don't start at fhr=1
-fhrs = df[("forecast_hour","feature")].unique()
+fhrs = df[("forecast_hour", "feature")].unique()
 fhrs = list(fhrs)
 fhrs.insert(0, "all")  # put "all" first because it takes the longest
 if nprocs:
     # Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
     # execcasper --ncpus=13 --mem=50GB # gpus not neeeded for verification
     pool = multiprocessing.Pool(processes=nprocs)
-    # used to set chunksize > 1, but because "all" takes so much longer, the chunk that includes "all" is screwed. Use default chunksize=1 
+    # used to set chunksize > 1, but because "all" takes so much longer, the chunk that includes "all" is screwed. Use default chunksize=1
     # Tried imap_unordered, but I like reproducability. Plus I could not sort fhrs
     # when string "all" was mixed with integers.
     data = pool.map(statjob, fhrs)
@@ -405,4 +409,3 @@ with open(ofile, "w") as fh:
     fh.write(''.join(data))
 
 logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")
-

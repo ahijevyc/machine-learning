@@ -88,10 +88,12 @@ if not os.path.exists(odir):
 if ifile is None:
     if model == "HRRR":
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
-        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
+        if debug:
+            ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
     elif model.startswith("NSC"):
         ifile = f'{model}.par'
-        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}_old.par'
+        if debug:
+            ifile = f'/glade/work/ahijevyc/NSC_objects/{model}_old.par'
 
 logging.info(f"Read {model} predictors from {ifile}")
 if os.path.exists(ifile):
@@ -170,12 +172,13 @@ if not clobber and os.path.exists(ofile):
 logging.info(f"output file will be {ofile}")
 
 before_filtering = len(df)
-# Used to test all columns for NA, but we only care about the feature subset being complete. 
+# Used to test all columns for NA, but we only care about the feature subset being complete.
 # For example, mode probs are not avaiable for fhr=2 but we don't need to drop fhr=2 if
-# the other features are complete. 
+# the other features are complete.
 features = get_features(args)
-logging.info(f"Retain rows where all {len(features)} requested features are present")
-df = df.loc[df[features].notna().all(axis="columns"),:]
+logging.info(
+    f"Retain rows where all {len(features)} requested features are present")
+df = df.loc[df[features].notna().all(axis="columns"), :]
 logging.info(f"kept {len(df)}/{before_filtering} cases with no NA features")
 
 logging.info(f"Split {len(rptcols)} labels away from predictors")
@@ -190,14 +193,16 @@ assert labels.sum().all() > 0, "at least 1 class has no True labels in testing s
 
 columns_before_filtering = df.columns
 df = df[features]
-logging.info(f"dropped features {set(columns_before_filtering) - set(df.columns)}")
-logging.info(f"kept {len(df.columns)}/{len(columns_before_filtering)} features")
+logging.info(
+    f"dropped features {set(columns_before_filtering) - set(df.columns)}")
+logging.info(
+    f"kept {len(df.columns)}/{len(columns_before_filtering)} features")
 
 
 if kfold > 1:
     cv = KFold(n_splits=kfold)
-    # Convert generator to list. You don't want a generator. 
-    # Generator depletes after first run of statjob, and if run serially, next time statjob is executed the entire fold loop is skipped. 
+    # Convert generator to list. You don't want a generator.
+    # Generator depletes after first run of statjob, and if run serially, next time statjob is executed the entire fold loop is skipped.
     cvsplit = list(cv.split(df))
 else:
     # Emulate a 1-split KFold object with all cases in test split.
@@ -246,7 +251,8 @@ def statjob(fhr, statcurves=None):
                 yl_labels == labels_fold_fhr.columns
             ), f"labels {label_fold_fhr.columns} don't match when model was trained {yl_labels}"
 
-            sv = pd.DataFrame(yl).set_index("columns").T # scaling values DataFrame as from .describe()
+            # scaling values DataFrame as from .describe()
+            sv = pd.DataFrame(yl).set_index("columns").T
             if sv.columns.size != features.columns.size:
                 logging.error(
                     f"size of yaml and features columns differ {sv.columns} {features.columns}"
@@ -268,9 +274,10 @@ def statjob(fhr, statcurves=None):
             # Grab numpy array of predictions.
             Y = model.predict(norm_features.to_numpy(dtype='float32'))
             # Put prediction numpy array into DataFrame with index (row) and column labels.
-            Y = pd.DataFrame(Y, columns=labels_fold_fhr.columns, index=features.index)
+            Y = pd.DataFrame(Y, columns=labels_fold_fhr.columns,
+                             index=features.index)
             # for each report type
-            for rpt_type in labels_fold_fhr.columns:  
+            for rpt_type in labels_fold_fhr.columns:
                 y_pred = Y[rpt_type]  # grab this particular report type
                 labels_fhr = labels_fold_fhr[rpt_type]
                 assert labels_fhr.index.equals(
@@ -291,7 +298,7 @@ def statjob(fhr, statcurves=None):
             # prepend "fold" level
             Y = pd.concat([Y], keys=[ifold], names=["fold"])
             # concatenate this fit/fold to the y_preds DataFrame
-            y_preds = pd.concat([y_preds,Y], axis="index")
+            y_preds = pd.concat([y_preds, Y], axis="index")
     # I may have overlapping valid_times from different init_times like fhr=1 from today and fhr=25 from previous day
     # average probability over all nfits initialized at initialization_time and valid at valid_time
     ensmean = y_preds.groupby(level=[
@@ -350,7 +357,7 @@ if nprocs:
     # Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
     # execcasper --ncpus=13 --mem=50GB # gpus not neeeded for verification
     pool = multiprocessing.Pool(processes=nprocs)
-    # used to set chunksize > 1, but because "all" takes so much longer, the chunk that includes "all" is screwed. Use default chunksize=1 
+    # used to set chunksize > 1, but because "all" takes so much longer, the chunk that includes "all" is screwed. Use default chunksize=1
     # Tried imap_unordered, but I like reproducability. Plus I could not sort fhrs
     # when string "all" was mixed with integers.
     data = pool.map(statjob, fhrs)
