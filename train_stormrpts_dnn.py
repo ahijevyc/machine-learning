@@ -62,12 +62,8 @@ def modedate(modeprob_files, model_dates):
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 def main():
-    #import pandas as pd # started getting UnboundLocalError: local variable 'pd' referenced before assignment Mar 1 2022 even though I import pandas above
 
     parser = get_argparser()
-    parser.add_argument('--fits', nargs="+", type=int, default=None, help="work on specific fit(s) so you can run many in parallel")
-    parser.add_argument('--folds', nargs="+", type=int, default=None, help="work on specific fold(s) so you can run many in parallel")
-    parser.add_argument('--seed', type=int, default=None, help="random number seed for reproducability")
 
     args = parser.parse_args()
     logging.info(args)
@@ -95,6 +91,8 @@ def main():
     rptdist        = args.rptdist
     savedmodel     = args.savedmodel
     seed           = args.seed
+    testend        = args.testend
+    teststart      = args.teststart
     trainend       = args.trainend
     trainstart     = args.trainstart
     suite          = args.suite
@@ -111,6 +109,10 @@ def main():
     # Could be 'adam' or SGD from Sobash 2020
     optimizer = get_optimizer(optimizer, learning_rate=learning_rate)
 
+    # Error if requested training and test period overlap and kfold == 1.
+    overlap = min([trainend, testend]) - max([trainstart, teststart])
+    assert overlap < datetime.timedelta(hours=0) or kfold > 1, f"training and testing periods overlap {trainstart}-{trainend}|{teststart}-{testend}"
+ 
     ### saved model name ###
     if savedmodel:
         pass
@@ -195,19 +197,20 @@ def main():
                 # set_index to avoid ValueError: Could not find any dimension coordinates to use to order the datasets for concatenation
                 modeds = xarray.open_mfdataset( ifiles, preprocess=lambda x: x.reset_coords(["lon","lat",'valid_time']).set_index(time=['init_time','forecast_hour']),
                         combine="nested", parallel=True, compat="override", combine_attrs="override") # parallel is faster
-            # Try nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
-            search_str = f'/glade/scratch/ahijevyc/NCAR700_objects/output_object_based/evaluation_zero_filled/20??????0000.nc'
-            ifiles = sorted(glob.glob(search_str))
-            logging.info(f"Ignore mode prob files for times that are not present in features DataFrame")
-            ifiles = modedate(ifiles, df.index.get_level_values("initialization_time"))
-            logging.info(f"Open and combine {len(ifiles)} storm mode probability files")
-            # Tried open_mfdataset, but got missing values for all but the first initialization time.
-            modeds = xarray.combine_nested([xarray.open_dataset(ifile) for ifile in ifiles], concat_dim="time")
-            no_time_dim = ["lat","lon","forecast_hour"]
-            logging.info("Remove time dimension from {remove_time_dimension}")
-            for e in no_time_dim:
-                modeds[e] = modeds[e].isel(time=0)
-            modeds = modeds.swap_dims(dict(record="forecast_hour",time="init_time")) 
+            else:
+                # Try nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
+                search_str = f'/glade/scratch/ahijevyc/NCAR700_objects/output_object_based/evaluation_zero_filled/20??????0000.nc'
+                ifiles = sorted(glob.glob(search_str))
+                logging.info(f"Ignore mode prob files for times that are not present in features DataFrame")
+                ifiles = modedate(ifiles, df.index.get_level_values("initialization_time"))
+                logging.info(f"Open and combine {len(ifiles)} storm mode probability files")
+                # Tried open_mfdataset, but got missing values for all but the first initialization time.
+                modeds = xarray.combine_nested([xarray.open_dataset(ifile) for ifile in ifiles], concat_dim="time")
+                no_time_dim = ["lat","lon","forecast_hour"]
+                logging.info("Remove time dimension from {remove_time_dimension}")
+                for e in no_time_dim:
+                    modeds[e] = modeds[e].isel(time=0)
+                modeds = modeds.swap_dims(dict(record="forecast_hour",time="init_time")) 
             logging.info(f"Make x and y indices actual coordinates so we can apply similarly-structured CONUS mask")
             modeds = modeds.assign_coords(dict(x=modeds.x,y=modeds.y))
             logging.info(f"Use CONUS mask and drop points outside CONUS")
@@ -225,7 +228,7 @@ def main():
             # df = df.sort_index(level=[0,1,2,3]).loc[(slice(None),slice(None),slice(None),slice(12,35))]
             # Tried join="left" but it ignored all the modeds columns. Tried "inner" but it ignored df fhrs 1-11 and 36.
             ds = df.to_xarray().merge(modeds, join="outer", compat="override") #  override to ignore the lat/lon mismatch (assumed small)
-            logging.info("Convert xarray Dataset to pandas DataFrame")
+            logging.info("Convert merged xarray Dataset to pandas DataFrame")
             df = ds.to_dataframe()
             # drop row if all columns are na. modeprobs are na for some forecast hours.
             logging.info(f"Drop rows with all NAs from {len(df)} row DataFrame")

@@ -40,8 +40,6 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 
 parser = get_argparser()
-parser.add_argument('--nprocs', type=int, default=0,
-                    help="verify this many forecast hours in parallel")
 parser.add_argument('field', type=str,
                     help="feature/column/predictor to base mask on")
 parser.add_argument('thresh', type=float,
@@ -103,22 +101,16 @@ if not os.path.exists(odir):
 
 ##################################
 
-
-logging.info(f"Read {model} predictors")
-if model == "HRRR":
-    if ifile is None:
+# Define input filename.
+if ifile is None:
+    if model == "HRRR":
         ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
-    if debug:
-        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
-    nfhr = 48
-elif model.startswith("NSC"):
-    if ifile is None:
+        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
+    elif model.startswith("NSC"):
         ifile = f'{model}.par'
-    if debug:
-        ifile = f'/glade/work/ahijevyc/NSC_objects/fastdebug.par'
-    nfhr = 36
+        if debug: ifile = f'/glade/work/ahijevyc/NSC_objects/{model}_old.par'
 
-
+logging.info(f"Read {model} predictors from {ifile}")
 if os.path.exists(ifile):
     logging.info(f'reading {ifile}')
     df = pd.read_parquet(ifile, engine="pyarrow")

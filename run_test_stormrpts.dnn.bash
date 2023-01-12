@@ -8,7 +8,7 @@ fi
 
 
 i=0 # number each line of command file
-ncpus=5
+ncpus=1
 mem=135GB
 walltime=4:00:00
 

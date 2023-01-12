@@ -1,5 +1,5 @@
 import argparse
-import datetime as dt
+import datetime
 import glob
 import logging
 import matplotlib.pyplot as plt
@@ -45,7 +45,7 @@ def configs_match(ylargs, args):
     teststart = args.teststart
     testend   = args.testend
     overlap = min([trainend, testend]) - max([trainstart, teststart])
-    if overlap >= dt.timedelta(hours=0) and args.kfold == 1:
+    if overlap >= datetime.timedelta(hours=0) and args.kfold == 1:
         logging.warning(f"training and testing time ranges overlap {trainstart}-{trainend}|{teststart}-{testend}")
    
     # Comparing config.yaml training period and requested training period (args) is not a good test because config.yaml bounds are "trimmed"
@@ -70,30 +70,35 @@ def get_argparser():
     parser.add_argument("--clobber", action='store_true', help="overwrite any old outfile, if it exists")
     parser.add_argument("-d", "--debug", action='store_true')
     parser.add_argument("--dropout", type=float, default=0., help='fraction of neurons to drop in each hidden layer (0-1)')
-    parser.add_argument('--nfits', type=int, default=5, help="number of times to fit (train) model")
     parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
     parser.add_argument('--fhr', nargs="+", type=int, default=list(range(1,49)), help="train with these forecast hours. Testing scripts only use this list to verify correct model "
                                                                                       "for testing; no filter applied to testing data. In other words you "
                                                                                       "test on all forecast hours in the testing data, regardless of whether the model was "
                                                                                       "trained with the same forecast hours.")
+    parser.add_argument('--fits', nargs="+", type=int, default=None, help="work on specific fit(s) so you can run many in parallel")
     parser.add_argument('--flash', type=int, default=10, help="GLM flash count threshold")
+    parser.add_argument('--folds', nargs="+", type=int, default=None, help="work on specific fold(s) so you can run many in parallel")
+    parser.add_argument("--glm", action='store_true', help='Use GLM')
     parser.add_argument('--kfold', type=int, default=5, help="apply kfold cross validation to training set")
     parser.add_argument('--ifile', type=str, help="Read this parquet input file. Otherwise guess which one to read.")
     parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="learning rate")
     parser.add_argument('--model', type=str, choices=["HRRR","NSC1km","NSC3km-12sec","NSC15km"], default="HRRR", help="prediction model")
-    parser.add_argument("--glm", action='store_true', help='Use GLM')
     parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
+    parser.add_argument('--nfits', type=int, default=5, help="number of times to fit (train) model")
+    parser.add_argument('--nprocs', type=int, default=0, help="verify this many forecast hours in parallel")
     parser.add_argument('--optimizer', type=str, choices=['adam','sgd'], default='adam', help="optimizer")
     parser.add_argument('--reg_penalty', type=float, default=0.01, help="L2 regularization factor")
     parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
     parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
+    parser.add_argument('--seed', type=int, default=None, help="random number seed for reproducability")
     parser.add_argument('--trainend', type=lambda s: pd.to_datetime(s), help="training set end")
     parser.add_argument('--trainstart', type=lambda s: pd.to_datetime(s), help="training set start")
     parser.add_argument('--testend', type=lambda s: pd.to_datetime(s), default="20220101T00", help="testing set end")
     parser.add_argument('--teststart', type=lambda s: pd.to_datetime(s), default="20201202T12", help="testing set start")
     parser.add_argument('--suite', type=str, default='default', help="name for suite of training features")
     parser.add_argument('--twin', type=int, default=2, help="time window in hours")
+
     return parser
 
 
@@ -108,7 +113,7 @@ def full_cmd(args):
     """
     s = " ".join(args._get_args())
     for kw,value in args._get_kwargs():
-        if isinstance(value, dt.datetime):
+        if isinstance(value, datetime.datetime):
             value = value.strftime("%Y%m%dT%H%M")
         if isinstance(value, bool):
             if not value:
@@ -156,7 +161,7 @@ def grab_predictors(args, idate, idir = '/glade/work/sobash/NSC_objects'):
     df["Date"] = df.Date.astype('datetime64[ns]')
     df = df.rename(columns=dict(yind="y",xind="x",Date="initialization_time",fhr="forecast_hour"))
     logging.info(f"derive valid_time from initialization_time + forecast_hour")
-    df["valid_time"] = pd.to_datetime(df["initialization_time"]) + df["forecast_hour"].astype(int) * dt.timedelta(hours=1)
+    df["valid_time"] = pd.to_datetime(df["initialization_time"]) + df["forecast_hour"].astype(int) * datetime.timedelta(hours=1)
     df = df.set_index(["y","x","initialization_time","forecast_hour"])
 
     # Derived fields
@@ -320,7 +325,7 @@ def print_scores(obs, fcst, label, desc="", n_bins=10, debug=False):
     histogram_of_counts = hwtmode.statisticplot.count_histogram(ax2, fcst, label=label, n_bins=n_bins, debug=debug)
     ROC_ax = plt.subplot2grid((3,2), (0,1), rowspan=2)
     roc_curve = hwtmode.statisticplot.ROC_curve(ROC_ax, obs, fcst, label=label, sep=0.1, debug=debug)
-    fineprint = f"{desc} {label}\ncreated {str(dt.datetime.now(tz=None)).split('.')[0]}"
+    fineprint = f"{desc} {label}\ncreated {str(datetime.datetime.now(tz=None)).split('.')[0]}"
     plt.annotate(s=fineprint, xy=(1,1), xycoords=('figure pixels', 'figure pixels'), va="bottom", fontsize=5) 
     ofile = f'{desc}.{label}.png'
     plt.savefig(ofile)
