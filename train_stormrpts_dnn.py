@@ -25,7 +25,7 @@ import xarray
 import yaml
 
 
-def baseline_model(input_dim=None, name=None, numclasses=None, neurons=16, layer=2, kernel_regularizer=None,
+def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], kernel_regularizer=None,
                    optimizer='adam', dropout=0, batch_normalize=False, learningrate=0.01):
 
     # Discard any pre-existing version of the model.
@@ -33,8 +33,8 @@ def baseline_model(input_dim=None, name=None, numclasses=None, neurons=16, layer
     # Previously used Dense here by providing input_dim, neurons, and activation args. Dense also made an input (layer).
     model.add(tf.keras.Input(shape=input_dim))
     # add dropout, batch normalization, and kernel regularization, even with only one layer.
-    for i in range(layer):
-        model.add(tf.keras.layers.Dense(neurons, activation='relu',
+    for n in neurons:
+        model.add(tf.keras.layers.Dense(n, activation='relu',
                   kernel_regularizer=kernel_regularizer))
         model.add(Dropout(rate=dropout))
         if batch_normalize:
@@ -90,7 +90,6 @@ def main():
     glm = args.glm
     ifile = args.ifile
     kfold = args.kfold
-    layer = args.layers
     learning_rate = args.learning_rate
     model = args.model
     neurons = args.neurons
@@ -433,7 +432,7 @@ def main():
             else:
                 logging.info(f"fitting {model_i}")
                 tf.keras.backend.clear_session()
-                model = baseline_model(input_dim=df.columns.size, numclasses=labels.columns.size, neurons=neurons[0], layer=layer, name=f"fit_{i}",
+                model = baseline_model(input_dim=df.columns.size, numclasses=labels.columns.size, neurons=neurons, name=f"fit_{i}",
                                        kernel_regularizer=L2(l2=reg_penalty), optimizer=optimizer, dropout=dropout)
                 history = model.fit(df.iloc[train_split].to_numpy(dtype='float32'), labels.iloc[train_split].to_numpy(dtype='float32'), class_weight=None,
                                     sample_weight=None, batch_size=batchsize, epochs=epochs, verbose=2)

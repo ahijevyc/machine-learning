@@ -54,7 +54,7 @@ def configs_match(ylargs, args):
     # args.trainstart <= trainstart            trainend <= args.trainend
     assert args.trainstart <= trainstart, f"Requested training period {args.trainstart}-{args.trainend} starts after actual 'trimmed' training period {trainstart}-{trainend} starts"
     assert trainend <= args.trainend,     f"Requested training period {args.trainstart}-{args.trainend} ends before actual 'trimmed' training period {trainstart}-{trainend} ends"
-    for key in ["batchnorm", "batchsize", "dropout", "epochs", "flash", "fhr", "glm", "kfold", "layers", "learning_rate", "model", "neurons",
+    for key in ["batchnorm", "batchsize", "dropout", "epochs", "flash", "fhr", "glm", "kfold", "learning_rate", "model", "neurons",
                 "optimizer", "reg_penalty", "rptdist", "suite", "twin"]:
         assert getattr(ylargs, key) == getattr(
             args, key), f'requested {key} {getattr(args,key)} does not match savedmodel yaml {key} {getattr(ylargs,key)}'
@@ -81,10 +81,9 @@ def get_argparser():
     parser.add_argument("--glm", action='store_true', help='Use GLM')
     parser.add_argument('--kfold', type=int, default=5, help="apply kfold cross validation to training set")
     parser.add_argument('--ifile', type=str, help="Read this parquet input file. Otherwise guess which one to read.")
-    parser.add_argument('--layers', default=2, type=int, help="number of hidden layers")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="learning rate")
     parser.add_argument('--model', type=str, choices=["HRRR","NSC1km","NSC3km-12sec","NSC15km"], default="HRRR", help="prediction model")
-    parser.add_argument('--neurons', type=int, nargs="+", default=[16], help="number of neurons in each nn layer")
+    parser.add_argument('--neurons', type=int, nargs="+", default=[16,16], help="number of neurons in each nn layer")
     parser.add_argument('--nfits', type=int, default=5, help="number of times to fit (train) model")
     parser.add_argument('--nprocs', type=int, default=0, help="verify this many forecast hours in parallel")
     parser.add_argument('--optimizer', type=str, choices=['adam','sgd'], default='adam', help="optimizer")
@@ -533,7 +532,8 @@ def savedmodel_default(args, odir="nn"):
     glmstr = "" # GLM description 
     if args.glm: glmstr = f"{args.flash}flash." # flash rate threshold and GLM time window
         
-    savedmodel  = f"{odir}/{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{args.neurons[0]}n.ep{args.epochs}.{fhr_str}."
-    savedmodel += f"bs{args.batchsize}.{args.layers}layer.{optimizer.name}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
+    neurons_str = ''.join([x+'n' for x in args.neurons]) # [1024] -> "1024n", [16,16] -> "16n16n"
+    savedmodel  = f"{odir}/{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{neurons_str}.ep{args.epochs}.{fhr_str}."
+    savedmodel += f"bs{args.batchsize}.{optimizer.name}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
         
     return savedmodel
