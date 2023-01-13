@@ -21,7 +21,7 @@ usage: train_stormrpts_dnn.py [-h] [--batchnorm] [--batchsize BATCHSIZE] [--clob
                               [--dropout DROPOUT] [--epochs EPOCHS] [--fhr FHR [FHR ...]]
                               [--fits FITS [FITS ...]] [--flash FLASH]
                               [--folds FOLDS [FOLDS ...]] [--glm] [--kfold KFOLD]
-                              [--ifile IFILE] [--layers LAYERS]
+                              [--ifile IFILE]
                               [--learning_rate LEARNING_RATE]
                               [--model {HRRR,NSC1km,NSC3km-12sec,NSC15km}]
                               [--neurons NEURONS [NEURONS ...]] [--nfits NFITS]
@@ -60,13 +60,12 @@ options:
   --kfold KFOLD         apply kfold cross validation to training set (default: 5)
   --ifile IFILE         Read this parquet input file. Otherwise guess which one to read.
                         (default: None)
-  --layers LAYERS       number of hidden layers (default: 2)
   --learning_rate LEARNING_RATE
                         learning rate (default: 0.001)
   --model {HRRR,NSC1km,NSC3km-12sec,NSC15km}
                         prediction model (default: HRRR)
   --neurons NEURONS [NEURONS ...]
-                        number of neurons in each nn layer (default: [16])
+                        number of neurons in each nn layer (default: [16,16])
   --nfits NFITS         number of times to fit (train) model (default: 5)
   --nprocs NPROCS       verify this many forecast hours in parallel (default: 0)
   --optimizer {adam,sgd}
@@ -96,7 +95,7 @@ usage: test_stormrpts_dnn.py [-h] [--batchnorm] [--batchsize BATCHSIZE] [--clobb
                              [--dropout DROPOUT] [--epochs EPOCHS] [--fhr FHR [FHR ...]]
                              [--fits FITS [FITS ...]] [--flash FLASH]
                              [--folds FOLDS [FOLDS ...]] [--glm] [--kfold KFOLD]
-                             [--ifile IFILE] [--layers LAYERS] [--learning_rate LEARNING_RATE]
+                             [--ifile IFILE] [--learning_rate LEARNING_RATE]
                              [--model {HRRR,NSC1km,NSC3km-12sec,NSC15km}]
                              [--neurons NEURONS [NEURONS ...]] [--nfits NFITS]
                              [--nprocs NPROCS] [--optimizer {adam,sgd}]
@@ -134,13 +133,12 @@ options:
   --kfold KFOLD         apply kfold cross validation to training set (default: 5)
   --ifile IFILE         Read this parquet input file. Otherwise guess which one to read.
                         (default: None)
-  --layers LAYERS       number of hidden layers (default: 2)
   --learning_rate LEARNING_RATE
                         learning rate (default: 0.001)
   --model {HRRR,NSC1km,NSC3km-12sec,NSC15km}
                         prediction model (default: HRRR)
   --neurons NEURONS [NEURONS ...]
-                        number of neurons in each nn layer (default: [16])
+                        number of neurons in each nn layer (default: [16,16])
   --nfits NFITS         number of times to fit (train) model (default: 5)
   --nprocs NPROCS       verify this many forecast hours in parallel (default: 0)
   --optimizer {adam,sgd}
@@ -165,6 +163,14 @@ options:
 
 #### Jan 2023
 
+#### Eliminate layers argument
+
+Eliminate layers argument. Get the number of layers from the length of the neurons list.
+That allows the layers to have different numbers of neurons.
+In the filenames, remove the ".xlayer" substring. For n-layer models, replace .16n. with .(16n)xn.
+For example, with a 3-layer model, .15n. becomes .15n15n15n. 
+For 1-layer models, no change is needed. 
+
 ##### clean up
 
 Cleaned up nn/ directory by moving 250+ hyperparameter search models to nn/hyperparam_search.HRRR/.
@@ -178,8 +184,8 @@ Removed nn_ prefix from saved model names.
 scores.txt files with no corresponding ML model tucked away in nn/orphan_score_files/. Unfortunately these 2 score.txt files
 showing improvement with storm mode for tornado forecasts have no corresponding model: 
 
-- NSC3km-12sec.default.rpt_40km_2hr.1024n.ep10.f01-f48.bs1024.1layer.SGD.L20.01.lr0.01.0.0.1fold.scores.txt
-- nn_NSC3km-12sec.with_CNN_DNN_storm_mode_nprob.rpt_40km_2hr.1024n.ep10.f01-f48.bs1024.1layer.SGD.L20.01.lr0.01.0.0.1fold.scores.txt
+- NSC3km-12sec.default.rpt_40km_2hr.1024n.ep10.f01-f48.bs1024.SGD.L20.01.lr0.01.0.0.1fold.scores.txt
+- nn_NSC3km-12sec.with_CNN_DNN_storm_mode_nprob.rpt_40km_2hr.1024n.ep10.f01-f48.bs1024.SGD.L20.01.lr0.01.0.0.1fold.scores.txt
 
 Trained new models with same hypterparameters but they showed no improvement with storm mode. Previous results could have
 been a code bug (e.g. inconsistent training and testing set time periods, forecast hour range, and scaling factors), small sample size (noise), 
