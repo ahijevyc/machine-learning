@@ -153,7 +153,7 @@ def grab_predictors(args, idate, idir = '/glade/work/sobash/NSC_objects'):
     elif model.startswith("NSC"):
         ifile = f'/glade/work/sobash/NSC_objects/grid_data_new/grid_data_{model}_d01_{idate.strftime("%Y%m%d%H-%M%S")}.par'
         # remove largest neighborhood size (fields containing N7 in the name)
-    df = pd.read_parquet(ifile, engine="pyarrow")
+    df = pd.read_parquet(ifile)
 
     # Index df and modeds the same way. 
     logging.info(f"convert df Date to datetime64[ns]")
@@ -532,7 +532,7 @@ def savedmodel_default(args, odir="nn"):
     glmstr = "" # GLM description 
     if args.glm: glmstr = f"{args.flash}flash." # flash rate threshold and GLM time window
         
-    neurons_str = ''.join([x+'n' for x in args.neurons]) # [1024] -> "1024n", [16,16] -> "16n16n"
+    neurons_str = ''.join([f"{x}n" for x in args.neurons]) # [1024] -> "1024n", [16,16] -> "16n16n"
     savedmodel  = f"{odir}/{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{neurons_str}.ep{args.epochs}.{fhr_str}."
     savedmodel += f"bs{args.batchsize}.{optimizer.name}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
         

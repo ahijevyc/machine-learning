@@ -17,8 +17,8 @@ fi
 
 echo read command file $cmdfile
 
-mem=140GB
-walltime=1:30:00
+mem=120GB
+walltime=2:50:00
 gpu=""
 
 # Loop through commands file one line at a time

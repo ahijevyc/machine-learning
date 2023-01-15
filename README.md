@@ -166,7 +166,7 @@ options:
 #### Eliminate layers argument
 
 Eliminate layers argument. Get the number of layers from the length of the neurons list.
-That allows the layers to have different numbers of neurons.
+Allows the layers to have different numbers of neurons.
 In the filenames, remove the ".xlayer" substring. For n-layer models, replace .16n. with .(16n)xn.
 For example, with a 3-layer model, .15n. becomes .15n15n15n. 
 For 1-layer models, no change is needed. 
@@ -187,20 +187,20 @@ showing improvement with storm mode for tornado forecasts have no corresponding 
 - NSC3km-12sec.default.rpt_40km_2hr.1024n.ep10.f01-f48.bs1024.SGD.L20.01.lr0.01.0.0.1fold.scores.txt
 - nn_NSC3km-12sec.with_CNN_DNN_storm_mode_nprob.rpt_40km_2hr.1024n.ep10.f01-f48.bs1024.SGD.L20.01.lr0.01.0.0.1fold.scores.txt
 
-Trained new models with same hypterparameters but they showed no improvement with storm mode. Previous results could have
-been a code bug (e.g. inconsistent training and testing set time periods, forecast hour range, and scaling factors), small sample size (noise), 
+Trained new models with same hyperparameters but they did not show the same improvement with storm mode. Maybe previous results 
+were due to a code bug (e.g. inconsistent training and testing set time periods, forecast hour range, and scaling factors), small sample size (noise), 
 buggy variables in the 3-km training set (W_DN_MAX, W_DN_MIN, yearly and daily time sin/cos components), fewer training variables 
 (LR75, MLCINH, REFL_COM, UP_HELI_MIN), or a longer training and testing period.
 
 ##### NSC training period changed
 
-The old time range of 3-km NSC was 20101024 - 20191020.
+An older iteration of 3-km NSC data went from 20101024 to 20191020.
 
-Now with 1-km and 15-km NSC data, and redone 3-km NSC data, the model initialization
-time range tightens to 20101024 - 20170330.
-With the later 2019 end time, it made sense to partition the training and 
-testing data at 20160701. That partition allowed a full season in the testing set.
-However, now that we end at 20170330, to ensure a full season in the testing set, we use an earlier partition: 20160101. 
+Now with 1-km and 15-km NSC data available for comparison and because 1-km is so expensive, the
+time range ends at 20170330. 
+Since the older iteration had more 2017, 2018, and 2019 data, it made sense to partition the training and 
+testing data as late as 20160701. That partitioning allowed a full season in the testing set.
+However, now that we stop at 20170330, to ensure a full season in the testing set, we use an earlier partition: 20160101. 
 Old models trained through 20160701 and tested through 20191020 were moved to subdirectory nn/trainend20160701.NSC/.
 
 ##### correct forecast hour range
@@ -209,9 +209,9 @@ Corrected fhr list going forward, both in config.yaml and output filenames. It w
 f01-f48 for a long time. That made sense for HRRR, but NSC only went to fhr=36. Moreover, if you want to train with 
 storm mode, the range is f12-f35.
 
-Filter the training set, eliminating forecast hours not in the requested list of forecast hours (args.fhr). 
-<i>Note, testing scripts only check the fhr list to ensure the correct model is used for testing; testing data are not filtered.</i>
-In other words you may test data from any forecast hour, even if the model was not trained with it.
+Trim the training set by eliminating forecast hours not in the requested list of forecast hours (args.fhr). 
+<i>Note, testing scripts only check the requested fhr list to ensure the correct model is used for testing; testing data are not trimmed based on forecast hour.</i>
+In other words you may test data from forecast hours 1-11 even if the model was only trained with 12-35.
 
 #### Dec 2021
 

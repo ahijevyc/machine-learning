@@ -321,13 +321,13 @@ def main():
 
     # Convert distance to closest storm report to True/False based on distance and time thresholds
     # And convert flash count to True/False based on distance, time, and flash thresholds
-    df, rptcols = rptdist2bool(df, args)
+    df, label_cols = rptdist2bool(df, args)
 
     plotclimo = False
     if plotclimo:
         mdf = df.groupby(["lon", "lat"]).sum()  # for debug plot
         fig, axes = plt.subplots(nrows=3, ncols=2)
-        for label, ax in zip(rptcols, axes.flatten()):
+        for label, ax in zip(label_cols, axes.flatten()):
             im = ax.scatter(mdf.index.get_level_values("lon"), mdf.index.get_level_values(
                 "lat"), c=mdf[label])  # Don't use mdf (sum) for lon/lat
             ax.set_title(label)
@@ -348,7 +348,7 @@ def main():
     setattr(args, 'trainstart', df.initialization_time.min())
     setattr(args, 'trainend', df.initialization_time.max())
     logging.info(
-        f"After filtering, trainstart={args.trainstart} trainend={args.trainend}")
+        f"After trimming, trainstart={args.trainstart} trainend={args.trainend}")
     df = df.drop(columns="initialization_time")
     logging.info(f"keep {len(df)}/{before_filtering} cases for training")
 
@@ -369,9 +369,9 @@ def main():
     logging.info(
         f"kept {len(df)}/{before_filtering} rows with requested forecast hours")
 
-    logging.info(f"Split {len(rptcols)} labels away from predictors")
-    labels = df[rptcols]  # labels converted to Boolean above
-    df = df.drop(columns=rptcols)
+    logging.info(f"Split {len(label_cols)} labels away from predictors")
+    labels = df[label_cols]  # labels converted to Boolean above
+    df = df.drop(columns=label_cols)
 
     df.info()
     print(labels.sum())
