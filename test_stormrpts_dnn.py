@@ -11,7 +11,6 @@ import numpy as np
 import os
 import pandas as pd
 import pdb
-import pickle
 import sklearn
 import sys
 from sklearn.model_selection import KFold
@@ -337,7 +336,7 @@ def statjob(fhr, statcurves=None):
                            fill=False, plabel=False)
             fig.suptitle(f"{suite} {rpt_type}")
             fig.text(0.5, 0.01, ' '.join(df.columns), wrap=True, fontsize=5)
-            ofile = f"{thissavedmodel}.{rpt_type}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.f{fhr}.png"
+            ofile = f"{savedmodel}.{rpt_type}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.f{fhr}.png"
             fig.savefig(ofile)
             logging.info(os.path.realpath(ofile))
             plt.clf()
