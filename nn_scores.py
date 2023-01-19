@@ -126,9 +126,9 @@ def main():
 
             if variable == "bss":
                 ylim = (-0.03,0.35)
-                if cl == "flashes": ylim = (0,0.75)
+                if cl.startswith("flashes"): ylim = (0,0.75)
                 if cl.startswith("torn") or cl.startswith("sig"): ylim = (-0.03, 0.12)
-                if cl.startswith("hailone"): ylim = (-0.02, 0.18)
+                #if cl.startswith("hailone"): ylim = (-0.02, 0.18)
                 topax.set_ylim(ylim)
 
             if ymax is not None:
