@@ -5,13 +5,12 @@ from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, get_glm, rptdist2bool, savedmodel_default
+from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, load_df, rptdist2bool, savedmodel_default
 import multiprocessing
 import numpy as np
 import os
 import pandas as pd
 import pdb
-import pickle
 import sklearn
 import sys
 from sklearn.model_selection import KFold
@@ -31,8 +30,6 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 
 parser = get_argparser()
-parser.add_argument('--nprocs', type=int, default=0,
-                    help="verify this many forecast hours in parallel")
 
 args = parser.parse_args()
 logging.info(args)
@@ -40,11 +37,7 @@ logging.info(args)
 # Assign arguments to simple-named variables
 clobber = args.clobber
 debug = args.debug
-flash = args.flash
-glm = args.glm
-ifile = args.ifile
 kfold = args.kfold
-model = args.model
 nfit = args.nfits
 nprocs = args.nprocs
 rptdist = args.rptdist
@@ -52,7 +45,6 @@ savedmodel = args.savedmodel
 testend = args.testend
 teststart = args.teststart
 suite = args.suite
-twin = args.twin
 
 
 if debug:
@@ -76,41 +68,9 @@ for ifold in range(kfold):
         logging.warning(
             f"next fit exists ({nextfit}). Are you sure nfit only {nfit}?")
 
-
-odir = os.path.join("/glade/scratch", os.getenv("USER"))
-if glm:
-    odir = os.path.join(odir, "GLM")
-if not os.path.exists(odir):
-    logging.info(f"making directory {odir}")
-    os.mkdir(odir)
-
 ##################################
 
-
-logging.info(f"Read {model} predictors")
-if model == "HRRR":
-    if ifile is None:
-        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
-    if debug:
-        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
-    nfhr = 48
-elif model.startswith("NSC"):
-    if ifile is None:
-        ifile = f'{model}.par'
-    if debug:
-        ifile = f'/glade/work/ahijevyc/NSC_objects/fastdebug.par'
-    nfhr = 36
-
-
-if os.path.exists(ifile):
-    logging.info(f'reading {ifile}')
-    df = pd.read_parquet(ifile, engine="pyarrow")
-else:
-    logging.error(f"why is there no parquet file for {model}?")
-    logging.error(
-        f"Do you need to run train_stormrpts_dnn.py to make {ifile}?")
-    sys.exit(1)
-
+df = load_df(args)
 
 df, rptcols = rptdist2bool(df, args)
 
@@ -178,16 +138,17 @@ if not clobber and os.path.exists(ofile):
 logging.info(f"output file will be {ofile}")
 
 before_filtering = len(df)
-# Used to test all columns for NA, but we only care about the feature subset being complete. 
+# Used to test all columns for NA, but we only care about the feature subset being complete.
 # For example, mode probs are not avaiable for fhr=2 but we don't need to drop fhr=2 if
-# the other features are complete. 
+# the other features are complete.
 features = get_features(args)
-logging.info(f"Retain rows where all {len(features)} requested features are present")
-df = df.loc[df[features].notna().all(axis="columns"),:]
+logging.info(
+    f"Retain rows where all {len(features)} requested features are present")
+df = df.loc[df[features].notna().all(axis="columns"), :]
 logging.info(f"kept {len(df)}/{before_filtering} cases with no NA features")
 
 logging.info(f"Split {len(rptcols)} labels away from predictors")
-labels = df[rptcols] # labels converted to Boolean above
+labels = df[rptcols]  # labels converted to Boolean above
 df = df.drop(columns=rptcols)
 
 df.info()
@@ -198,21 +159,27 @@ assert labels.sum().all() > 0, "at least 1 class has no True labels in testing s
 
 columns_before_filtering = df.columns
 df = df[features]
-logging.info(f"dropped features {set(columns_before_filtering) - set(df.columns)}")
-logging.info(f"kept {len(df.columns)}/{len(columns_before_filtering)} features")
+logging.info(
+    f"dropped features {set(columns_before_filtering) - set(df.columns)}")
+logging.info(
+    f"kept {len(df.columns)}/{len(columns_before_filtering)} features")
 
 
 if kfold > 1:
     cv = KFold(n_splits=kfold)
-    # Convert generator to list. You don't want a generator. 
-    # Generator depletes after first run of statjob, and if run serially, next time statjob is executed the entire fold loop is skipped. 
+    # Convert generator to list. You don't want a generator.
+    # Generator depletes after first run of statjob, and if run serially, next time statjob is executed the entire fold loop is skipped.
     cvsplit = list(cv.split(df))
 else:
     # Emulate a 1-split KFold object with all cases in test split.
     cvsplit = [([], np.arange(len(df)))]
 
 
-def statjob(fhr):
+def statjob(fhr, statcurves=None):
+    if statcurves is None:
+        statcurves = fhr == "all"
+    if statcurves:
+        fig = plt.figure(figsize=(10, 7))
     # this_fhr for all cases, not just one fold
     if fhr == "all":
         this_fhr = ~df["forecast_hour"].isna()  # all finite forecast hours
@@ -228,7 +195,7 @@ def statjob(fhr):
             # all finite forecast hours
             this_fold_fhr = ~df_fold["forecast_hour"].isna()
         else:
-            this_fold_fhr = df_fold["forecast_hour"] == fhr # Just this fhr
+            this_fold_fhr = df_fold["forecast_hour"] == fhr  # Just this fhr
         features = df_fold[this_fold_fhr]
         labels_fold_fhr = labels_fold[this_fold_fhr]
 
@@ -250,7 +217,8 @@ def statjob(fhr):
                 yl_labels == labels_fold_fhr.columns
             ), f"labels {label_fold_fhr.columns} don't match when model was trained {yl_labels}"
 
-            sv = pd.DataFrame(yl).set_index("columns").T # scaling values DataFrame as from .describe()
+            # scaling values DataFrame as from .describe()
+            sv = pd.DataFrame(yl).set_index("columns").T
             if sv.columns.size != features.columns.size:
                 logging.error(
                     f"size of yaml and features columns differ {sv.columns} {features.columns}"
@@ -291,7 +259,7 @@ def statjob(fhr):
             # prepend "fold" level
             Y = pd.concat([Y], keys=[ifold], names=["fold"])
             # concatenate this fit/fold to the y_preds DataFrame
-            y_preds = pd.concat([y_preds,Y], axis="index")
+            y_preds = pd.concat([y_preds, Y], axis="index")
     # I may have overlapping valid_times from different init_times like fhr=1 from today and fhr=25 from previous day
     # average probability over all nfits initialized at initialization_time and valid at valid_time
     ensmean = y_preds.groupby(level=[
@@ -332,7 +300,7 @@ if nprocs:
     # Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
     # execcasper --ncpus=13 --mem=50GB # gpus not neeeded for verification
     pool = multiprocessing.Pool(processes=nprocs)
-    # used to set chunksize > 1, but because "all" takes so much longer, the chunk that includes "all" is screwed. Use default chunksize=1 
+    # used to set chunksize > 1, but because "all" takes so much longer, the chunk that includes "all" is screwed. Use default chunksize=1
     # Tried imap_unordered, but I like reproducability. Plus I could not sort fhrs
     # when string "all" was mixed with integers.
     data = pool.map(statjob, fhrs)

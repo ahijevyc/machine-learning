@@ -14,7 +14,7 @@ from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, get_glm, rptdist2bool, savedmodel_default
+from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, load_df, rptdist2bool, savedmodel_default
 import multiprocessing
 import numpy as np
 import os
@@ -53,11 +53,7 @@ logging.info(args)
 clobber = args.clobber
 debug = args.debug
 field = args.field
-flash = args.flash
-glm = args.glm
-ifile = args.ifile
 kfold = args.kfold
-model = args.model
 nfit = args.nfits
 nprocs = args.nprocs
 rptdist = args.rptdist
@@ -66,7 +62,6 @@ testend = args.testend
 thresh = args.thresh
 teststart = args.teststart
 suite = args.suite
-twin = args.twin
 
 
 if debug:
@@ -90,37 +85,9 @@ for ifold in range(kfold):
         logging.warning(
             f"next fit exists ({nextfit}). Are you sure nfit only {nfit}?")
 
-
-odir = os.path.join("/glade/scratch", os.getenv("USER"))
-if glm:
-    odir = os.path.join(odir, "GLM")
-if not os.path.exists(odir):
-    logging.info(f"making directory {odir}")
-    os.mkdir(odir)
-
 ##################################
 
-# Define input filename.
-if ifile is None:
-    if model == "HRRR":
-        ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
-        if debug:
-            ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
-    elif model.startswith("NSC"):
-        ifile = f'{model}.par'
-        if debug:
-            ifile = f'/glade/work/ahijevyc/NSC_objects/{model}_old.par'
-
-logging.info(f"Read {model} predictors from {ifile}")
-if os.path.exists(ifile):
-    logging.info(f'reading {ifile}')
-    df = pd.read_parquet(ifile, engine="pyarrow")
-else:
-    logging.error(f"why is there no parquet file for {model}?")
-    logging.error(
-        f"Do you need to run train_stormrpts_dnn.py to make {ifile}?")
-    sys.exit(1)
-
+df = load_df(args)
 
 df, rptcols = rptdist2bool(df, args)
 

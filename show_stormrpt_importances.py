@@ -6,7 +6,7 @@ import hwtmode
 import hwtmode.data
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, rptdist2bool, get_glm
+from ml_functions import brier_skill_score, rptdist2bool
 import numpy as np
 import os
 import pandas as pd
