@@ -20,7 +20,7 @@ do
     if [[ $line == *"--model NSC"* ]]; then
         mem=70GB
         ncpus=$ncpus
-        walltime=0:55:00
+        walltime=2:00:00
     fi
 
     cat <<EOS | qsub

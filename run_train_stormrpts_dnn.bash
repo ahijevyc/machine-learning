@@ -9,11 +9,7 @@ fi
 
 fit=$1
 
-# Use smaller fit-specific command file created by missing_models.py if it exists.
-cmdfile=cmds_$fit.txt
-if [[ ! -f "$cmdfile" ]]; then
-    cmdfile=cmds.txt
-fi
+cmdfile=cmds.txt
 
 echo read command file $cmdfile
 
