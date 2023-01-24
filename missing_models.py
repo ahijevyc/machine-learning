@@ -57,8 +57,11 @@ for cmd in cmds:
                 # Initialize savedmodel. I think it is usually None. This helps
                 # remember the odir for the test_stormrpts_dnn.py script.
                 setattr(args, "savedmodel", savedmodel)
+            elif not os.path.exists(model_i):
+                logging.error(f"No {model_i}")
+                missing = True
             else:
-                logging.error(f"No {model_i} or no config.yaml")
+                logging.error(f"no {model_i}/config.yaml")
                 missing = True
     if missing:
         f = open(c, "a")
