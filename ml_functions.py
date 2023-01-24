@@ -30,9 +30,9 @@ def brier_skill_score(obs, preds):
         #bss = 1.0 - (bs/bs_climo+K.epsilon()) # TODO: shouldn't K.epsilon() be grouped with denominator?
         bss = 1.0 - bs/(bs_climo+K.epsilon())
     else:
-        bs = np.mean((preds - obs) ** 2)
+        bs = np.mean((preds - obs) ** 2, axis=0)
         obs_climo = np.mean(obs, axis=0) # use each observed class frequency instead of 1/nclasses. Only matters if obs is multiclass.
-        bs_climo = np.mean((obs - obs_climo) ** 2)
+        bs_climo = np.mean((obs - obs_climo) ** 2, axis=0)
         bss = 1 - bs/bs_climo
 
     return bss
@@ -202,28 +202,25 @@ def rptdist2bool(df, args):
     rptdist = args.rptdist
     twin = args.twin
     logging.debug(f"report distance {rptdist}km  time window {twin}h")
-    # get rid of storm report distance columns that are associated with different time window (twin)
+    # Drop storm report distance columns that are associated with different time window (twin)
     dropcol=[]
     for r in ["sighail", "sigwind", "hailone", "wind", "torn"]:
         for h in [0,1,2]:
             if h != twin:
                 dropcol.append(f"{r}_rptdist_{h}hr")
-    df = df.drop(columns=dropcol)
 
-    rptcols = []
-    for r in ["sighail", "sigwind", "hailone", "wind", "torn"]:
-        rh = f"{r}_rptdist_{twin}hr"
-        # Convert severe report distance to boolean (0-rptdist = True)
-        df[rh] = (df[rh] >= 0) & (df[rh] < rptdist) # TODO: test speed with .loc[:,rh]. it seemed slower.
-        # new Boolean column name with numeric dist threshold instead of numberless "rptdist".
-        newcol = f"{r}_{rptdist}km_{twin}hr"
-        df = df.rename(columns={rh:newcol}, errors="raise")
-        rptcols.append(newcol)
+    events = ["sighail", "sigwind", "hailone", "wind", "torn"] 
+    rptcols = [ f"{r}_rptdist_{twin}hr" for r in events ]
+    renamecolumns = {r : r.replace("rptdist", f"{rptdist}km") for r in rptcols}
+    logging.debug(f'replace "rptdist" with "{rptdist}km" in column names {renamecolumns}')
+    df = df.rename(columns=renamecolumns, copy=False, errors="raise")
+    rptcols = list(renamecolumns.values())
+    logging.info("Convert severe report distance to boolean (0-rptdist = True)")
+    df[rptcols] = (df[rptcols] >= 0) & (df[rptcols] < rptdist) # tested with df[rptcols].loc[:,rptcols] = . it is slower.
 
-    # Any report
+    logging.debug("derive any report")
     any_rpt_col = f"any_{rptdist}km_{twin}hr"
-    hailwindtorn = [f"{r}_{rptdist}km_{twin}hr" for r in ["hailone","wind","torn"]]
-    df[any_rpt_col] = df[hailwindtorn].any(axis="columns")
+    df[any_rpt_col] = df[rptcols].any(axis="columns")
     rptcols.append(any_rpt_col)
 
     # GLM?
@@ -234,10 +231,11 @@ def rptdist2bool(df, args):
         logging.debug(f"at least {args.flash} flashes in {flash_spacetime_win}")
         df[flash_spacetime_win] = df[flash_spacetime_win] >= args.flash
         rptcols.append(flash_spacetime_win)
-        # Drop all the other "flash_" columns of various space/time windows.
-        dropcol = [x for x in df.columns if x.startswith("flash_") and x != flash_spacetime_win]
-        df = df.drop(columns=dropcol)
+        # Drop other "flash_" columns of different space/time windows.
+        dropcol = dropcol + [x for x in df.columns if x.startswith("flash_") and x != flash_spacetime_win]
 
+    logging.info(f"Dropping {len(dropcol)} columns")
+    df = df.drop(columns=dropcol)
     return df, rptcols
 
 def get_glm(time_space_windows, date=None):
