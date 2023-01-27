@@ -5,6 +5,7 @@ import logging
 import matplotlib.pyplot as plt
 import pandas as pd
 import pdb
+import pickle
 import numpy as np
 import hwtmode.statisticplot
 from hwtmode.data import decompose_circular_feature
@@ -80,6 +81,7 @@ def get_argparser():
     parser.add_argument('--folds', nargs="+", type=int, default=None, help="work on specific fold(s) so you can run many in parallel")
     parser.add_argument("--glm", action='store_true', help='Use GLM')
     parser.add_argument('--kfold', type=int, default=5, help="apply kfold cross validation to training set")
+    parser.add_argument('--idate', type=lambda s: pd.to_datetime(s), help="single initialization time")
     parser.add_argument('--ifile', type=str, help="Read this parquet input file. Otherwise guess which one to read.")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="learning rate")
     parser.add_argument('--model', type=str, choices=["HRRR","NSC1km","NSC3km-12sec","NSC15km"], default="HRRR", help="prediction model")
@@ -136,77 +138,11 @@ def get_optimizer(s, learning_rate = 0.001, **kwargs):
     return o
 
 
-def grab_predictors(args, idate, idir = '/glade/work/sobash/NSC_objects'):
-    model = args.model
-    twin = args.twin
-    rptdist = args.rptdist
-    time_space_windows = [(twin,rptdist)]
-    # Define ifiles, a list of input files from glob.glob method
-    if model == "HRRR":
-        if idate < pd.to_datetime("20191002"):
-            logging.error(f"No {model} before 20191002")
-            sys.exit(1)
-        if idate < pd.to_datetime("20201202"):
-            ifile = f'{idir}/HRRR_new/grid_data/grid_data_HRRRX_d01_{idate.strftime("%Y%m%d%H-%M%S")}.par'
-        else:
-            ifile = f'{idir}/HRRR_new/grid_data/grid_data_HRRR_d01_{idate.strftime("%Y%m%d%H-%M%S")}.par'
-    elif model.startswith("NSC"):
-        ifile = f'/glade/work/sobash/NSC_objects/grid_data_new/grid_data_{model}_d01_{idate.strftime("%Y%m%d%H-%M%S")}.par'
-        # remove largest neighborhood size (fields containing N7 in the name)
-    df = pd.read_parquet(ifile)
-
-    # Index df and modeds the same way. 
-    logging.info(f"convert df Date to datetime64[ns]")
-    df["Date"] = df.Date.astype('datetime64[ns]')
-    df = df.rename(columns=dict(yind="y",xind="x",Date="initialization_time",fhr="forecast_hour"))
-    logging.info(f"derive valid_time from initialization_time + forecast_hour")
-    df["valid_time"] = pd.to_datetime(df["initialization_time"]) + df["forecast_hour"].astype(int) * datetime.timedelta(hours=1)
-    df = df.set_index(["y","x","initialization_time","forecast_hour"])
-
-    # Derived fields
-    df["dayofyear"] = df["valid_time"].dt.dayofyear
-    df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15
-    df = decompose_circular_feature(df, "dayofyear", period=365.25)
-    df = decompose_circular_feature(df, "Local_Solar_Hour", period=24)
-    df = df.reset_index().set_index(["valid_time","y","x"])
-
-    if args.glm:
-        earliest_valid_time = df.index.get_level_values(level="valid_time").min()
-        latest_valid_time = df.index.get_level_values(level="valid_time").max()
-        assert latest_valid_time > pd.to_datetime("20160101"), "DataFrame completely before GLM exists"
-        glmds = get_glm(time_space_windows)
-        glmds = glmds.sel(valid_time = slice(earliest_valid_time,latest_valid_time)) # Trim GLM to time window of model data
-        logging.info(f"Merge flashes with {model} DataFrame")
-        # In glmds, x : west to east, y : south to north
-        # In sobash df, xind : south to north, yind : west to east.
-        glmds = glmds.rename(dict(x="y",y="x")) #dimensions are renamed to match sobash df.
-        df = df.merge(glmds.to_dataframe(), left_on=["valid_time","y","x"], right_on=["valid_time","y","x"])
-        #Do {model} and GLM overlap at all?"
-        assert not df.empty, f"Merged {model}/GLM Dataset is empty."
-        # Sanity check--make sure prediction model and GLM grid box lat lons are similar
-        assert (df.lon_y - df.lon_x).max() < 0.1, f"{model} and glm longitudes don't match"
-        assert (df.lat_y - df.lat_x).max() < 0.1, f"{model} and glm lats don't match"
-        df = df.drop(columns=["lon_y","lat_y"])
-        df = df.rename(columns=dict(lon_x="lon",lat_x="lat")) # helpful for scale factor pickle file.
-
-    return df
-
-
-def load_df(args):
+def load_df(args, idir="/glade/work/sobash/NSC_objects"):
+    debug = args.debug
+    idate = args.idate
     ifile = args.ifile
     model = args.model
-
-    # mask = pickle.load(open('/glade/u/home/sobash/2013RT/usamask.pk', 'rb'))
-    mask = pickle.load(open('./usamask.pk', 'rb'))
-    height, width = 65, 93
-    mask = mask.reshape((height, width))
-    mask = xarray.DataArray(mask, dims=["y", "x"])
-    logging.info(f"Make x and y indices actual coordinates of mask")
-    mask = mask.assign_coords(dict(x=mask.x, y=mask.y))
-    if False:
-        ax = plt.axes(projection=G211.g211)
-        xs = G211.xs
-        ys = G211.ys
 
     # Define input filename.
     if ifile is None:
@@ -219,53 +155,68 @@ def load_df(args):
             ifile = f'{model}.par'
             if debug:
                 ifile = f'/glade/work/ahijevyc/NSC_objects/{model}_old.par'
+        if idate:
+            ifile = os.path.join(os.getenv('TMPDIR'), f"{model}.{idate.strftime('%Y%m%d%H-%M%S')}.par")
 
     logging.info(
         f"Read {model} predictors. Use parquet file {ifile}, if it exists. If it doesn't exist, create it.")
     if os.path.exists(ifile):
-        logging.info(f'reading {ifile}')
+        logging.info(f'reading {ifile} {os.path.getsize(ifile)/1024**3:.1f}G')
         df = pd.read_parquet(ifile, engine="pyarrow")
         return df
     
     # Define ifiles, a list of input files from glob.glob method
     if model == "HRRR":
         # HRRRX = experimental HRRR (v4)
-        search_str = f'/glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRRX_d01_20*00-0000.par'
+        search_str = f'{idir}/HRRR_new/grid_data/grid_data_HRRRX_d01_20*00-0000.par'
         if debug:
             search_str = search_str.replace("*", "2006*")  # just June 2020
         else:
             # append HRRR to HRRRX.
             # HRRR prior to Dec 3 2020 is v3 and HRRR at Dec 3 2020 and afterwards is v4.
             # Dec 3-9, 2020
-            search_str += ' /glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_2020120[3-9]*-0000.par'
+            search_str += f' {idir}/HRRR_new/grid_data/grid_data_HRRR_d01_2020120[3-9]*00-0000.par' # 00z only
             # Dec 10-31, 2020
-            search_str += ' /glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202012[1-3]*-0000.par'
+            search_str += f' {idir}/HRRR_new/grid_data/grid_data_HRRR_d01_202012[1-3]*00-0000.par' # 00z only
             # 2021+
-            search_str += ' /glade/work/sobash/NSC_objects/HRRR_new/grid_data/grid_data_HRRR_d01_202[1-9]*-0000.par'
+            search_str += f' {idir}/HRRR_new/grid_data/grid_data_HRRR_d01_202[1-9]*00-0000.par' # 00z only
         logging.info(f"ifiles search string {search_str}")
         ifiles = []
         for x in search_str.split(" "):
             ifiles.extend(glob.glob(x))
     elif model.startswith("NSC"):
-        search_str = f'/glade/work/sobash/NSC_objects/grid_data_new/grid_data_{model}_d01_20*00-0000.par'
+        search_str = f'{idir}/grid_data_new/grid_data_{model}_d01_20*00-0000.par'
         if debug:
             search_str = search_str.replace(
                 "grid_data_new", "grid_data")  # old dataset for debugging
         ifiles = glob.glob(search_str)
 
-    # Used to drop 7x7 neighborhood variables but for some reason it messed up the read_parquet step, not finding the "LTG2" or
-    # LTGS5T5 when doing HRRRXHRRR.
+    if idate:
+        if model == "HRRR":
+            if idate < pd.to_datetime("20191002"):
+                logging.error(f"No {model} before 20191002")
+                sys.exit(1)
+            if idate < pd.to_datetime("20201202"):
+                ifiles = [f'{idir}/HRRR_new/grid_data/grid_data_HRRRX_d01_{idate.strftime("%Y%m%d%H-%M%S")}.par']
+            else:
+                ifiles = [f'{idir}/HRRR_new/grid_data/grid_data_HRRR_d01_{idate.strftime("%Y%m%d%H-%M%S")}.par']
+        elif model.startswith("NSC"):
+            ifiles = [f'{idir}/grid_data_new/grid_data_{model}_d01_{idate.strftime("%Y%m%d%H-%M%S")}.par']
+        else:
+            logging.error(f"unexpected model {model} with idate {idate}")
+            sys.exit(1)
 
+        
     logging.info(f"Reading {len(ifiles)} {model} files")
     # pd.read_parquet only handles one file at a time, so pd.concat
     df = pd.concat(pd.read_parquet(f, engine="pyarrow")
-                   for f in ifiles)
+            for f in ifiles)
 
     # Index df and modeds the same way.
     logging.info(f"convert df Date to datetime64[ns]")
     df["Date"] = df.Date.astype('datetime64[ns]')
     df = df.rename(columns=dict(yind="y", xind="x",
-                   Date="initialization_time", fhr="forecast_hour"))
+                   Date="initialization_time", fhr="forecast_hour"), copy=False)
     logging.info(
         f"derive valid_time from initialization_time + forecast_hour")
     df["valid_time"] = pd.to_datetime(
@@ -310,6 +261,18 @@ def load_df(args):
                 dict(record="forecast_hour", time="init_time"))
         logging.info(
             f"Make x and y indices actual coordinates so we can apply similarly-structured CONUS mask")
+        # mask = pickle.load(open('/glade/u/home/sobash/2013RT/usamask.pk', 'rb'))
+        mask = pickle.load(open('./usamask.pk', 'rb'))
+        height, width = 65, 93
+        mask = mask.reshape((height, width))
+        mask = xarray.DataArray(mask, dims=["y", "x"])
+        logging.info(f"Make x and y indices actual coordinates of mask")
+        mask = mask.assign_coords(dict(x=mask.x, y=mask.y))
+        if False:
+            ax = plt.axes(projection=G211.g211)
+            xs = G211.xs
+            ys = G211.ys
+
         modeds = modeds.assign_coords(dict(x=modeds.x, y=modeds.y))
         logging.info(f"Use CONUS mask and drop points outside CONUS")
         # even with drop=True you still have nans. mask is not a box. It has irregular disjointed edges.
@@ -344,19 +307,40 @@ def load_df(args):
     df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15
     df = decompose_circular_feature(df, "dayofyear", period=365.25)
     df = decompose_circular_feature(df, "Local_Solar_Hour", period=24)
-    logging.info("convert 64-bit to 32-bit columns")
-    dtype_dict = {
-        k: np.float32 for k in df.select_dtypes(np.float64).columns}
-    dtype_dict.update(
-        {k: np.int32 for k in df.select_dtypes(np.int64).columns})
-    df = df.astype(dtype_dict, copy=False)
     df = df.reset_index().set_index(["valid_time", "y", "x"])
 
-    if glm:
-        earliest_valid_time = df.index.get_level_values(
-            level="valid_time").min()
-        latest_valid_time = df.index.get_level_values(
-            level="valid_time").max()
+    earliest_valid_time = df.index.get_level_values(
+        level="valid_time").min()
+    latest_valid_time = df.index.get_level_values(
+        level="valid_time").max()
+
+    # Merge weatherbug lightning data
+    logging.info("load wbug lightning data")
+    wbug, nominal_rptdist = xarray.open_dataset("/glade/campaign/mmm/parc/ahijevyc/wbug_lightning/flash.G211.nc"), "40km"
+    wbug = wbug.sel(time=slice(earliest_valid_time,latest_valid_time))
+    # In wbug, x : west to east, y : south to north
+    # In sobash df, xind : south to north, yind : west to east.
+    # dimensions are renamed to match sobash df.
+    wbug = wbug.rename(dict(time="valid_time",x="y", y="x", 
+        cg_hourly=f"cg_{nominal_rptdist}_hourly", 
+        ic_hourly=f"ic_{nominal_rptdist}_hourly"))
+    #     df     | wbug
+    #================== 
+    # valid_time | time
+    #     y      |  x
+    #     x      |  y
+    logging.info("merge wbug lightning data")
+    df = df.merge(wbug.to_dataframe(), on=["valid_time", "y", "x"])
+    logging.info("done merging wbug lightning data")
+    # Sanity check--make sure prediction model and GLM grid box lat lons are similar
+    assert np.isclose(df.lon_y, df.lon_x, atol=0.1).all(), f"{model} and wbug longitudes don't match"
+    assert np.isclose(df.lat_y, df.lat_x, atol=0.1).all(), f"{model} and wbug lats don't match"
+    df = df.drop(columns=["lon_y", "lat_y"])
+    # helpful for scale factor pickle file.
+    df = df.rename(columns=dict(lon_x="lon", lat_x="lat"), copy=False)
+
+    # Merge Geostationary Lightning Mapper data
+    if args.glm:
         assert latest_valid_time > pd.to_datetime(
             "20160101"), "DataFrame completely before GLM exists"
         time_space_windows = [(1, 40), (2, 40)]
@@ -364,13 +348,12 @@ def load_df(args):
         # Trim GLM to time window of model data
         glmds = glmds.sel(valid_time=slice(
             earliest_valid_time, latest_valid_time))
-        logging.info(f"Merge flashes with {model} DataFrame")
         # In glmds, x : west to east, y : south to north
         # In sobash df, xind : south to north, yind : west to east.
         # dimensions are renamed to match sobash df.
         glmds = glmds.rename(dict(x="y", y="x"))
-        df = df.merge(glmds.to_dataframe(), left_on=[
-                      "valid_time", "y", "x"], right_on=["valid_time", "y", "x"])
+        logging.info(f"Merge flashes with {model} DataFrame")
+        df = df.merge(glmds.to_dataframe(), on=["valid_time", "y", "x"])
         # Do {model} and GLM overlap at all?"
         assert not df.empty, f"Merged {model}/GLM Dataset is empty."
         # Sanity check--make sure prediction model and GLM grid box lat lons are similar
@@ -378,12 +361,21 @@ def load_df(args):
         assert np.isclose(df.lat_y, df.lat_x, atol=0.1).all(), f"{model} and glm lats don't match"
         df = df.drop(columns=["lon_y", "lat_y"])
         # helpful for scale factor pickle file.
-        df = df.rename(columns=dict(lon_x="lon", lat_x="lat"))
+        df = df.rename(columns=dict(lon_x="lon", lat_x="lat"), copy=False)
+
+    logging.info("convert 64-bit to 32-bit columns")
+    dtype_dict = {
+        k: np.float32 for k in df.select_dtypes(np.float64).columns}
+    dtype_dict.update(
+        {k: np.int32 for k in df.select_dtypes(np.int64).columns})
+    df = df.astype(dtype_dict, copy=False)
 
     logging.info(f"writing {ifile}")
     df.to_parquet(ifile)
     return df
 
+
+    
 
 
 def rptdist2bool(df, args):
@@ -415,6 +407,23 @@ def rptdist2bool(df, args):
     any_rpt_col = f"any_{rptdist}km_{twin}hr"
     df[any_rpt_col] = df[rptcols].any(axis="columns")
     rptcols.append(any_rpt_col)
+
+    # weatherbug CG and IC lightning
+    for ltg in [f"cg_{rptdist}km_hourly", f"ic_{rptdist}km_hourly"]:
+        # Sum hourly counts within time window
+        # For twin=1, add hourly flash counts from -1h to 0h.
+        # For twin=2, add -2h, -1h, 0h, and +1h
+        # center=True and closed="right" are needed because hourly count covers time [ t, t+1h )
+        logging.info(f"sum {ltg} in {twin}h time window")
+        # remove duplicates allows you to assign to df[ltg]. Avoids "can't handle non-unique values in MultiIndex" error.
+        ltg_sum = df.loc[~df.index.duplicated(keep='first'),ltg].groupby(["y","x"]).rolling(twin*2, center=True, closed="right").sum().droplevel([0,1]) 
+        df[ltg] = ltg_sum 
+        logging.info(f"threshold {ltg} at {args.flash} flashes")
+        df[ltg] = df[ltg] >= args.flash
+        # Change "hourly" part of column name to timewindow string f"{twin}hr"
+        newname = ltg.rstrip("hourly") + f"{twin}hr"
+        df = df.rename(columns={ltg:newname}, copy=False)
+        rptcols.append(newname)
 
     # GLM?
     if args.glm:
