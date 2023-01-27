@@ -2,7 +2,6 @@ import argparse
 import datetime
 import G211
 import glob
-from hwtmode.data import decompose_circular_feature
 import logging
 import matplotlib.pyplot as plt
 from ml_functions import brier_skill_score, get_argparser, get_features, get_optimizer, load_df, make_fhr_str, rptdist2bool, savedmodel_default
@@ -26,7 +25,7 @@ import yaml
 
 
 def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], kernel_regularizer=None,
-                   optimizer='adam', dropout=0, batch_normalize=False, learningrate=0.01):
+                   optimizer_name='adam', dropout=0, batch_normalize=False, learning_rate=0.01):
 
     # Discard any pre-existing version of the model.
     model = tf.keras.models.Sequential(name=name)
@@ -44,6 +43,7 @@ def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], 
 
     # Compile model with optimizer and loss function. MSE is same as brier_score.
     loss = "binary_crossentropy"  # in HWT_mode, I used categorical_crossentropy
+    optimizer = get_optimizer(optimizer_name, learning_rate=learning_rate)
     model.compile(loss=loss, optimizer=optimizer, metrics=[
                   MeanSquaredError(), brier_skill_score, AUC(), "accuracy"])
 
@@ -92,7 +92,7 @@ def main():
     learning_rate = args.learning_rate
     neurons = args.neurons
     nfit = args.nfits
-    optimizer = args.optimizer
+    optimizer_name = args.optimizer
     reg_penalty = args.reg_penalty  # L2
     rptdist = args.rptdist
     savedmodel = args.savedmodel
@@ -111,9 +111,6 @@ def main():
         random.seed(seed)
         np.random.seed(seed)
         tf.random.set_seed(seed)
-
-    # Could be 'adam' or SGD from Sobash 2020
-    optimizer = get_optimizer(optimizer, learning_rate=learning_rate)
 
     # Error if requested training and test period overlap and kfold == 1.
     overlap = min([trainend, testend]) - max([trainstart, teststart])
@@ -244,15 +241,14 @@ def main():
                 logging.info(f"{model_i} exists")
             else:
                 logging.info(f"fitting {model_i}")
-                tf.keras.backend.clear_session()
                 model = baseline_model(input_dim=df.columns.size, numclasses=labels.columns.size, neurons=neurons, name=f"fit_{i}",
-                                       kernel_regularizer=L2(l2=reg_penalty), optimizer=optimizer, dropout=dropout)
+                                       kernel_regularizer=L2(l2=reg_penalty), optimizer_name=optimizer_name, dropout=dropout, learning_rate=learning_rate)
                 history = model.fit(df.iloc[train_split].to_numpy(dtype='float32'), labels.iloc[train_split].to_numpy(dtype='float32'), class_weight=None,
                                     sample_weight=None, batch_size=batchsize, epochs=epochs, verbose=2)
                 logging.debug(f"saving {model_i}")
                 model.save(model_i)
-                del (history)
-                del (model)
+                del model
+                tf.keras.backend.clear_session()
                 # Save order of columns, scaling factors, all arguments.
                 with open(os.path.join(model_i, "config.yaml"), "w") as yfile:
                     yaml.dump(
