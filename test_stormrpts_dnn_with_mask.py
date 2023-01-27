@@ -371,7 +371,7 @@ else:
         data.append(statjob(fhr))
 
 with open(ofile, "w") as fh:
-    fh.write('class,mem,fold,fhr,mask,bss,base rate,auc,aps,n\n')
+    fh.write('class,mem,fold,forecast_hour,mask,bss,base rate,auc,aps,n\n')
     fh.write(''.join(data))
 
 logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")

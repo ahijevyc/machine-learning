@@ -335,7 +335,7 @@ else:
 
 
 with open(ofile, "w") as fh:
-    fh.write('class,mem,fold,fhr,bss,base rate,auc,aps,n\n')
+    fh.write('class,mem,fold,forecast_hour,bss,base rate,auc,aps,n\n')
     fh.write(''.join(data))
 
 logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")
