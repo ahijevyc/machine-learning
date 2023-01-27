@@ -29,7 +29,7 @@ def parse_args():
     parser.add_argument("--mask", type=str, nargs="+", help="only show this(these) mask value(s)")
     parser.add_argument("--n_boot", type=int, default=1000, help="number of bootstrap sammples")
     parser.add_argument("--nofineprint", action="store_true", help="no fine print (ci, time created, etc)")
-    parser.add_argument("--nomembers", action="store_true", help="no members")
+    parser.add_argument("--nofits", action="store_true", help="don't show individual fits")
     parser.add_argument("--noplot", action="store_true", help="no plot, just print all-forecast hour means)")
     parser.add_argument("-v","--variable", type=str, default="bss", help="variable to plot")
     parser.add_argument("--ymax",type=float, help="maximum on y-axis")
@@ -49,7 +49,7 @@ def main():
     mask        = args.mask
     n_boot      = args.n_boot
     nofineprint = args.nofineprint
-    nomem       = args.nomembers
+    nofit       = args.nofits
     noplot      = args.noplot
     variable    = args.variable
     ymax        = args.ymax
@@ -65,9 +65,9 @@ def main():
     # Figure dimensions, line thicknesses, text alignment
     fig = plt.figure(figsize=(11,8.5))
     text_kw = dict(fontsize=10, ha="left", va="center", clip_on=True) # clip_on in case variable is so low it squishes botax
-    # If ci is zero, don't plot confidence band; plot individual lines for all members    
+    # If ci is zero, don't plot confidence band; plot individual lines for all fits
     if ci == 0:
-        line_kw = dict(units="mem", estimator=None)
+        line_kw = dict(units="fit", estimator=None)
     else:
         # If ci is not zero plot ci% confidence interval
         line_kw = dict(errorbar=('ci',95), n_boot=n_boot)
@@ -83,8 +83,8 @@ def main():
         if mask is not None:
             dfs = dfs[dfs["mask"].isin(mask)]
 
-    # Append fold to mem and drop fold column.
-    dfs["mem"] = dfs["mem"] + "." + dfs["fold"]
+    # Append fold to fit and drop fold column.
+    dfs["fit"] = dfs["fit"] + "." + dfs["fold"]
     dfs = dfs.drop(columns="fold")
 
     # common prefix for nn
@@ -96,10 +96,10 @@ def main():
     # Loop thru types of event (torn, wind, hail, lightning)
     for cl, df in dfs.groupby("class"):
         print(f"\n{cl}    prefix={prefix}")
-        # Separate fhr=all
-        df_all = df[df.fhr=="all"]
-        df = df.copy()[df.fhr != "all"]
-        df["fhr"] = df["fhr"].astype(int)
+        # Separate forecast_hour=all
+        df_all = df[df.forecast_hour=="all"]
+        df = df.copy()[df.forecast_hour != "all"]
+        df["forecast_hour"] = df["forecast_hour"].astype(int)
         if not noplot:
             topax = plt.subplot2grid((3,1),(0,0), rowspan=2)
             botax = plt.subplot2grid((3,1),(2,0), rowspan=1, sharex=topax)
@@ -108,20 +108,17 @@ def main():
             if not nofineprint:
                 fineprint.set_text(f"ci={ci}%  n_boot={n_boot}\ncreated {datetime.datetime.now()}")
 
-            iens = df["mem"] == "ensmean.all"
-            if not nomem:
-                sns.lineplot(data=df[~iens], x="fhr", y=variable,  ax=topax, **line_kw)
+            iens = df["fit"] == "ensmean.all"
+            if not nofit:
+                sns.lineplot(data=df[~iens], x="forecast_hour", y=variable,  ax=topax, **line_kw)
             if ensmean:
                 logging.info("ensemble mean")
-                lp = sns.lineplot(data=df[iens], x="fhr", y=variable,  ax=topax, **line_kw, legend=nomem)
-                for line in lp.get_lines(): # print "ens. mean" at end of line
-                    if line.get_xydata().size: # some lines are empty
-                        topax.text(*line.get_xydata()[-1], "ens. mean", **text_kw)
-                topax.set_xlim(topax.get_xlim()[0], topax.get_xlim()[1]+1.2) # add space for "ensmean" label
+                lp = sns.lineplot(data=df[iens], x="forecast_hour", y=variable,  ax=topax, **line_kw, legend=nofit)
+                # Used to label with "ens. mean". but it keeps labeling fits mean too. (the one within the CI band)
 
             # Base rate
             base_rate_ax = botax
-            sns.lineplot(data=df, x="fhr", y="base rate", ax=base_rate_ax, legend=False, **line_kw) # ignores color arg
+            sns.lineplot(data=df, x="forecast_hour", y="base_rate", ax=base_rate_ax, legend=False, **line_kw) # ignores color arg
             base_rate_ax.xaxis.set_major_locator(ticker.MultipleLocator(3))
 
             if variable == "bss":
@@ -152,9 +149,9 @@ def main():
             plt.clf()
 
         # Look at the aggregrate scores for "all" forecast hours. Not what was plotted.
-        df_all = df_all[df_all.mem == "ensmean.all"].set_index("nn")
+        df_all = df_all[df_all.fit == "ensmean.all"].set_index("nn")
         df_all = df_all.sort_values(variable,ascending=False)
-        columns = ["bss","base rate","auc","aps"]
+        columns = ["bss","base_rate","auc","aps"]
         columns_added_later = ["mask", "n"]
         for col in columns_added_later:
             if col in dfs:
