@@ -15,7 +15,7 @@ echo read command file $cmdfile
 
 mem=120GB
 walltime=2:50:00
-gpu=""
+gpu=":ngpus=1"
 
 # Loop through commands file one line at a time
 # enumerate the cmd lines starting with zero
@@ -42,13 +42,14 @@ do
 #PBS -j oe
 #PBS -l walltime=$walltime
 #PBS -l select=1:ncpus=1${gpu}:mem=$mem
+#PBS -l gpu_type=v100
 #PBS -o $i.$fit.$fold.out
 #PBS -q casper
 
 cd /glade/work/ahijevyc/NSC_objects
 
 module load conda # if you need conda environment.
-conda activate tf2
+conda activate tf
 
 python train_stormrpts_dnn.py --fits $fit --folds $fold $line 
 EOS
