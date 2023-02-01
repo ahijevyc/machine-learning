@@ -20,7 +20,7 @@ def nns(ifile):
 def parse_args():
     # =============Arguments===================
     parser = argparse.ArgumentParser(description = "plot NN verification scores written by test_stormrpts_dnn.py, often in /glade/work/ahijevyc/NSC_objects/nn/.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('ifiles', nargs="+", type=argparse.FileType("r"), help="input file(s)")
+    parser.add_argument('ifiles', nargs="+", type=str, help="input file(s)")
     parser.add_argument("--ci", type=int, default=95, help="confidence interval. Show individual lines if ci=0")
     parser.add_argument("-d", "--debug", action="store_true", help="turn on debug mode")
     parser.add_argument("--dpi", type=int, default=120, help="output resolution")
@@ -32,6 +32,8 @@ def parse_args():
     parser.add_argument("--nofits", action="store_true", help="don't show individual fits")
     parser.add_argument("--noplot", action="store_true", help="no plot, just print all-forecast hour means)")
     parser.add_argument("-v","--variable", type=str, default="bss", help="variable to plot")
+    parser.add_argument("--xmax",type=float, help="maximum on x-axis")
+    parser.add_argument("--xmin",type=float, help="minimum on x-axis")
     parser.add_argument("--ymax",type=float, help="maximum on y-axis")
     parser.add_argument("--ymin",type=float, help="minimum on y-axis")
     args = parser.parse_args()
@@ -52,6 +54,8 @@ def main():
     nofit       = args.nofits
     noplot      = args.noplot
     variable    = args.variable
+    xmax        = args.xmax
+    xmin        = args.xmin
     ymax        = args.ymax
     ymin        = args.ymin
 
@@ -75,7 +79,7 @@ def main():
     line_kw.update(dict(hue="nn", style="nn", lw=lw))
 
     logging.info(f"Read {len(ifiles)} input files into Pandas DataFrame, with new nn column equal to input filename")
-    dfs = pd.concat([pd.read_csv(ifile,header=0).assign(nn=nns(ifile.name)) for ifile in ifiles], ignore_index=True) # ignore index or get duplicate indices
+    dfs = pd.concat([pd.read_csv(ifile,header=0).assign(nn=nns(ifile)) for ifile in ifiles], ignore_index=True) # ignore index or get duplicate indices
 
     # If DataFrame has a "mask" column, use it to signify linewidth.
     if "mask" in dfs:
@@ -104,9 +108,13 @@ def main():
             topax = plt.subplot2grid((3,1),(0,0), rowspan=2)
             botax = plt.subplot2grid((3,1),(2,0), rowspan=1, sharex=topax)
             # Empty fineprint_string placeholder for fine print in lower left corner of image.
-            fineprint = plt.annotate(text="", xy=(0,-55), xycoords=('axes fraction','axes pixels'), va="top", fontsize=6, wrap=True)
+            # counterintuitively, larger y offset makes more space for fineprint at bottom (cause of tight_layout)
+            fineprint = plt.annotate(text="", xy=(0,-62), xycoords=('axes fraction','axes pixels'), va="top", fontsize=6, wrap=True)
             if not nofineprint:
-                fineprint.set_text(f"ci={ci}%  n_boot={n_boot}\ncreated {datetime.datetime.now()}")
+                txt = args.__dict__.copy()
+                # ifiles list is too long for fineprint. Can get them from legend and title anyway.
+                del(txt["ifiles"])
+                fineprint.set_text(f"{txt}\ncreated {datetime.datetime.now()}")
 
             iens = df["fit"] == "ensmean.all"
             if not nofit:
@@ -123,11 +131,15 @@ def main():
 
             if variable == "bss":
                 ylim = (-0.03,0.35)
-                if cl.startswith("flashes"): ylim = (0,0.75)
+                if cl.startswith("flashes") or cl.startswith("cg_") or cl.startswith("ic_") : ylim = (0,0.75)
                 if cl.startswith("torn") or cl.startswith("sig"): ylim = (-0.03, 0.12)
                 #if cl.startswith("hailone"): ylim = (-0.02, 0.18)
                 topax.set_ylim(ylim)
 
+            if xmax is not None:
+                topax.set_xlim(right=xmax)
+            if xmin is not None:
+                topax.set_xlim(left=xmin)
             if ymax is not None:
                 topax.set_ylim(top=ymax)
             if ymin is not None:
@@ -142,7 +154,7 @@ def main():
                         handlelength=3, title_fontsize=fontsize*1.1) #default handlelength=2. to see entire cycle of long patterns
             else:
                 topax.legend(handles, labels, fontsize=fontsize, title=prefix, title_fontsize=fontsize*1.1)
-            ofile = f"{os.path.join(os.getenv('TMPDIR'),os.path.dirname(prefix),cl+'.'+os.path.basename(prefix))}.png"
+            ofile = f"{os.path.join(os.getenv('TMPDIR',os.path.dirname(prefix)),cl+'.'+os.path.basename(prefix))}.png"
             plt.tight_layout()
             fig.savefig(ofile, dpi=dpi)
             logging.info(os.path.realpath(ofile))
