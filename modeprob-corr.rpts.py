@@ -2,7 +2,7 @@ import argparse
 import datetime
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import get_argparser, rptdist2bool, savedmodel_default
+from ml_functions import get_argparser, rptdist2bool, get_savedmodel_path
 import numpy as np
 import os
 import pandas as pd
@@ -28,7 +28,6 @@ kfold                 = args.kfold
 model                 = args.model
 nfit                  = args.nfits
 rptdist               = args.rptdist
-savedmodel            = args.savedmodel
 teststart             = args.teststart
 twin                  = args.twin
 
@@ -38,8 +37,7 @@ if debug:
 
 
 ### saved model name ###
-if savedmodel is None:
-    savedmodel = savedmodel_default(args)
+savedmodel = get_savedmodel_path(args)
 logging.info(f"savedmodel={savedmodel}")
 
 

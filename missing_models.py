@@ -8,7 +8,7 @@ This script searches for models in the list that have not been created.
 import argparse
 import glob
 import logging
-from ml_functions import full_cmd, get_argparser, savedmodel_default
+from ml_functions import full_cmd, get_argparser, get_savedmodel_path
 import os
 import pdb
 import sys
@@ -35,7 +35,7 @@ for cmd in cmds:
     words = cmd.split()
     parser = get_argparser()
     args = parser.parse_args(cmd.split())
-    savedmodel = savedmodel_default(args, odir=odir)
+    savedmodel = get_savedmodel_path(args, odir=odir)
     teststart = args.teststart.strftime('%Y%m%d%H')
     testend = args.testend.strftime('%Y%m%d%H')
     scores = f"{savedmodel}.{args.kfold}fold.{teststart}-{testend}scores.txt"

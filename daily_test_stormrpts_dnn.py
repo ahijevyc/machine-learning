@@ -5,7 +5,7 @@ from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, load_df, rptdist2bool, savedmodel_default
+from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, load_df, rptdist2bool, get_savedmodel_path
 import multiprocessing
 import numpy as np
 import os
@@ -41,7 +41,6 @@ kfold = args.kfold
 nfit = args.nfits
 nprocs = args.nprocs
 rptdist = args.rptdist
-savedmodel = args.savedmodel
 testend = args.testend
 teststart = args.teststart
 suite = args.suite
@@ -51,11 +50,8 @@ if debug:
     logging.basicConfig(level=logging.DEBUG)
 
 
-### saved model name ###
-if savedmodel:
-    pass
-else:
-    savedmodel = savedmodel_default(args)
+### saved model path ###
+savedmodel = get_savedmodel_path(args)
 logging.info(f"savedmodel={savedmodel}")
 
 for ifold in range(kfold):
@@ -74,36 +70,8 @@ df = load_df(args)
 
 df, rptcols = rptdist2bool(df, args)
 
-# This script expects MultiIndex valid_time, projection_y_coordinate, projection_x_coordinate (t, ew, ns)
-if df.index.names == ["valid_time", "projection_y_coordinate", "projection_x_coordinate"]:
-    pass
-else:
-    xs = df.index.get_level_values(level="x")
-    ys = df.index.get_level_values(level="y")
-    if xs.min() == 21 and xs.max() == 80 and ys.min() == 12 and ys.max() == 46:
-        rdict = {"y": "projection_x_coordinate",
-                 "x": "projection_y_coordinate"}
-        logging.info(f"renaming axes {rdict}")
-        # NSC3km-12sec saved as forecast_hour, y, x
-        df = df.rename_axis(index=rdict)
-    elif ys.min() == 21 and ys.max() == 80 and xs.min() == 12 and xs.max() == 46:
-        rdict = {"x": "projection_x_coordinate",
-                 "y": "projection_y_coordinate"}
-        logging.info(f"renaming axes {rdict}")
-        # NSC3km-12sec saved as forecast_hour, y, x
-        df = df.rename_axis(index=rdict)
-    else:
-        logging.error(
-            "unexpected x and y coordinates. check mask, training script, parquet file...")
-        sys.exit(1)
+assert set(df.index.names) == set(['valid_time', 'x', 'y']), f"unexpected index names for df {df.index.names}"
 
-
-assert set(df.index.names) == set(['valid_time', 'projection_x_coordinate',
-                                   'projection_y_coordinate']), f"unexpected index names for df {df.index.names}"
-
-# This script expects "forecast_hour" spelled out.
-df = df.rename(columns={"fhr": "forecast_hour",
-               "init_time": "initialization_time"})
 
 # Make initialization_time a MultiIndex level
 df = df.set_index("initialization_time", append=True)
@@ -263,8 +231,7 @@ def statjob(fhr, statcurves=None):
     # I may have overlapping valid_times from different init_times like fhr=1 from today and fhr=25 from previous day
     # average probability over all nfits initialized at initialization_time and valid at valid_time
     ensmean = y_preds.groupby(level=[
-        "valid_time", "projection_y_coordinate",
-        "projection_x_coordinate", "initialization_time"
+        "valid_time", "y", "x", "initialization_time"
     ]).mean()
     assert "fit" not in ensmean.index.names, "fit should not be a MultiIndex level of ensmean, the average probability over nfits."
     # for statistic curves plot file name

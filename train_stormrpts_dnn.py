@@ -1,20 +1,15 @@
-import argparse
 import datetime
-import G211
-import glob
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, get_argparser, get_features, get_optimizer, load_df, make_fhr_str, rptdist2bool, savedmodel_default
+from ml_functions import get_argparser, get_features, get_optimizer, load_df, rptdist2bool, get_savedmodel_path
 import numpy as np
 import os
 import pandas as pd
 import pdb
-import pickle
 import random
 import re
 import sys
 from sklearn.model_selection import KFold, GroupKFold, train_test_split
-from sklearn.preprocessing import LabelEncoder
 import tensorflow as tf
 from tensorflow.keras.layers import Dropout, BatchNormalization
 from tensorflow.keras.metrics import MeanSquaredError, AUC
@@ -45,7 +40,7 @@ def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], 
     loss = "binary_crossentropy"  # in HWT_mode, I used categorical_crossentropy
     optimizer = get_optimizer(optimizer_name, learning_rate=learning_rate)
     model.compile(loss=loss, optimizer=optimizer, metrics=[
-                  MeanSquaredError(), brier_skill_score, AUC(), "accuracy"])
+                  MeanSquaredError(), AUC(), "accuracy"])
 
     return model
 
@@ -95,7 +90,6 @@ def main():
     optimizer_name = args.optimizer
     reg_penalty = args.reg_penalty  # L2
     rptdist = args.rptdist
-    savedmodel = args.savedmodel
     seed = args.seed
     testend = args.testend
     teststart = args.teststart
@@ -118,10 +112,7 @@ def main():
         hours=0) or kfold > 1, f"training and testing periods overlap {trainstart}-{trainend}|{teststart}-{testend}"
 
     ### saved model name ###
-    if savedmodel:
-        pass
-    else:
-        savedmodel = savedmodel_default(args)
+    savedmodel = get_savedmodel_path(args)
     logging.info(f"savedmodel={savedmodel}")
 
     ##################################
@@ -159,19 +150,18 @@ def main():
     setattr(args, 'trainend', df.initialization_time.max())
     logging.info(
         f"After trimming, trainstart={args.trainstart} trainend={args.trainend}")
-    df = df.drop(columns="initialization_time")
     logging.info(f"keep {len(df)}/{before_filtering} cases for training")
 
-    before_filtering = len(df)
+    beforedropna = len(df)
     # Used to test all columns for NA, but we only care about the feature subset being complete.
     # For example, mode probs are not available for fhr=2 but we don't need to drop fhr=2 if
     # the other features are complete.
-    features = get_features(args)
+    feature_list = get_features(args)
     logging.info(
-        f"Retain rows where all {len(features)} requested features are present")
-    df = df.loc[df[features].notna().all(axis="columns"), :]
+        f"Retain rows where all {len(feature_list)} requested features are present")
+    df = df.dropna(axis="index", subset=feature_list)
     logging.info(
-        f"kept {len(df)}/{before_filtering} cases with no NA features")
+        f"kept {len(df)}/{beforedropna} cases with no NA features")
 
     before_filtering = len(df)
     logging.info(f"Retain rows with requested forecast hours {fhr}")
@@ -181,7 +171,6 @@ def main():
 
     logging.info(f"Split {len(label_cols)} labels away from predictors")
     labels = df[label_cols]  # labels converted to Boolean above
-    df = df.drop(columns=label_cols)
 
     df.info()
     print(labels.sum())
@@ -189,10 +178,10 @@ def main():
     assert all(
         labels.sum()) > 0, "some classes have no True labels in training set"
 
-    # This filtering of features must occur after initialization time is used and discarded, and after labels are separated and saved.
+    # This extraction of features must occur after initialization time is used and after labels are separated and saved.
     before_filtering = df.columns
-    df = df[features]
-    logging.info(f"dropped features {set(before_filtering) - set(df.columns)}")
+    df = df[feature_list]
+    logging.info(f"dropped {set(before_filtering) - set(df.columns)}")
     logging.info(f"kept {len(df.columns)}/{len(before_filtering)} features")
 
     logging.info(f"calculating mean and std scaling values")

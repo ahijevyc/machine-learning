@@ -72,6 +72,7 @@ def get_argparser():
     parser.add_argument("-d", "--debug", action='store_true')
     parser.add_argument("--dropout", type=float, default=0., help='fraction of neurons to drop in each hidden layer (0-1)')
     parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
+    parser.add_argument('--event', default=None, choices=["cg", "ic", "flash", "sighail", "sigwind", "hailone", "wind", "torn"], help="train for this event only")
     parser.add_argument('--fhr', nargs="+", type=int, default=list(range(1,49)), help="train with these forecast hours. Testing scripts only use this list to verify correct model "
                                                                                       "for testing; no filter applied to testing data. In other words you "
                                                                                       "test on all forecast hours in the testing data, regardless of whether the model was "
@@ -336,7 +337,6 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects"):
     assert np.isclose(df.lon_y, df.lon_x, atol=0.1).all(), f"{model} and wbug longitudes don't match"
     assert np.isclose(df.lat_y, df.lat_x, atol=0.1).all(), f"{model} and wbug lats don't match"
     df = df.drop(columns=["lon_y", "lat_y"])
-    # helpful for scale factor pickle file.
     df = df.rename(columns=dict(lon_x="lon", lat_x="lat"), copy=False)
 
     # Merge Geostationary Lightning Mapper data
@@ -352,10 +352,10 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects"):
         # In sobash df, xind : south to north, yind : west to east.
         # dimensions are renamed to match sobash df.
         glmds = glmds.rename(dict(x="y", y="x"))
-        logging.info(f"Merge flashes with {model} DataFrame")
+        logging.info(f"merge flashes with {model} DataFrame")
         df = df.merge(glmds.to_dataframe(), on=["valid_time", "y", "x"])
         # Do {model} and GLM overlap at all?"
-        assert not df.empty, f"Merged {model}/GLM Dataset is empty."
+        assert not df.empty, f"merged {model}/GLM Dataset is empty."
         # Sanity check--make sure prediction model and GLM grid box lat lons are similar
         assert np.isclose(df.lon_y, df.lon_x, atol=0.1).all(), f"{model} and glm longitudes don't match"
         assert np.isclose(df.lat_y, df.lat_x, atol=0.1).all(), f"{model} and glm lats don't match"
@@ -383,25 +383,20 @@ def rptdist2bool(df, args):
     Convert distance to closest storm report to True/False based on distance and time thresholds 
     And convert flash count to True/False based on distance, time, and flash threshold. 
     """
-    
+   
+    event = args.event 
     rptdist = args.rptdist
     twin = args.twin
     logging.debug(f"report distance {rptdist}km  time window {twin}h")
-    # Drop storm report distance columns that are associated with different time window (twin)
-    dropcol=[]
-    for r in ["sighail", "sigwind", "hailone", "wind", "torn"]:
-        for h in [0,1,2]:
-            if h != twin:
-                dropcol.append(f"{r}_rptdist_{h}hr")
-
-    events = ["sighail", "sigwind", "hailone", "wind", "torn"] 
-    rptcols = [ f"{r}_rptdist_{twin}hr" for r in events ]
+    lsrtypes =  ["sighail", "sigwind", "hailone", "wind", "torn"]
+    rptcols = [ f"{r}_rptdist_{twin}hr" for r in lsrtypes ]
     renamecolumns = {r : r.replace("rptdist", f"{rptdist}km") for r in rptcols}
     logging.debug(f'replace "rptdist" with "{rptdist}km" in column names {renamecolumns}')
     df = df.rename(columns=renamecolumns, copy=False, errors="raise")
+    # Replace old rptcols list with list of new names
     rptcols = list(renamecolumns.values())
-    logging.info("Convert severe report distance to boolean (0-rptdist = True)")
-    df[rptcols] = (df[rptcols] >= 0) & (df[rptcols] < rptdist) # tested with df[rptcols].loc[:,rptcols] = . it is slower.
+    logging.info(f"Convert severe report distance to boolean [0,{rptdist}km) = True")
+    df[rptcols] = (0 <= df[rptcols]) & (df[rptcols] < rptdist) # tested with df[rptcols].loc[:,rptcols] = . it is slower.
 
     logging.debug("derive any report")
     any_rpt_col = f"any_{rptdist}km_{twin}hr"
@@ -409,21 +404,31 @@ def rptdist2bool(df, args):
     rptcols.append(any_rpt_col)
 
     # weatherbug CG and IC lightning
-    for ltg in [f"cg_{rptdist}km_hourly", f"ic_{rptdist}km_hourly"]:
+    weatherbug =  [f"cg_{rptdist}km_hourly", f"ic_{rptdist}km_hourly"]
+    use_weatherbug = event is None or event == "cg" or event == "ic"
+    if use_weatherbug:
         # Sum hourly counts within time window
         # For twin=1, add hourly flash counts from -1h to 0h.
         # For twin=2, add -2h, -1h, 0h, and +1h
         # center=True and closed="right" are needed because hourly count covers time [ t, t+1h )
-        logging.info(f"sum {ltg} in {twin}h time window")
-        # remove duplicates allows you to assign to df[ltg]. Avoids "can't handle non-unique values in MultiIndex" error.
-        ltg_sum = df.loc[~df.index.duplicated(keep='first'),ltg].groupby(["y","x"]).rolling(twin*2, center=True, closed="right").sum().droplevel([0,1]) 
-        df[ltg] = ltg_sum 
-        logging.info(f"threshold {ltg} at {args.flash} flashes")
-        df[ltg] = df[ltg] >= args.flash
-        # Change "hourly" part of column name to timewindow string f"{twin}hr"
-        newname = ltg.rstrip("hourly") + f"{twin}hr"
-        df = df.rename(columns={ltg:newname}, copy=False)
-        rptcols.append(newname)
+        logging.info(f"sum {weatherbug} in {twin}h time window")
+        # remove duplicates and sort by index (including time)
+        sorted_in_time = df.loc[~df.index.duplicated(keep='first'),weatherbug].sort_index()
+        # For each location, calculate rolling sum (in time window)
+        ltg_sum = sorted_in_time.groupby(["y","x"]).rolling(twin*2, center=True, closed="right").sum().droplevel([0,1]) 
+        logging.info(f"assign sum to {weatherbug} columns in order of original DataFrame df")
+        df[weatherbug] = ltg_sum.loc[df.index]
+        logging.info(f"threshold {weatherbug} at {args.flash} flashes")
+        df[weatherbug] = df[weatherbug] >= args.flash
+        # Change "hourly" part of weatherbug column name to timewindow string f"{twin}hr"
+        renamecolumns = {l : l.rstrip("hourly") + f"{twin}hr" for l in weatherbug}
+        df = df.rename(columns=renamecolumns, copy=False)
+        newname = renamecolumns.values()
+        rptcols.extend(newname)
+        either = f"cg.ic_{rptdist}km_{twin}hr"
+        logging.info(f"{' or '.join(newname)} = {either}")
+        df[either] = df[newname].any(axis="columns")
+        rptcols.append(either)
 
     # GLM?
     if args.glm:
@@ -433,11 +438,11 @@ def rptdist2bool(df, args):
         logging.debug(f"at least {args.flash} flashes in {flash_spacetime_win}")
         df[flash_spacetime_win] = df[flash_spacetime_win] >= args.flash
         rptcols.append(flash_spacetime_win)
-        # Drop other "flash_" columns of different space/time windows.
-        dropcol = dropcol + [x for x in df.columns if x.startswith("flash_") and x != flash_spacetime_win]
 
-    logging.info(f"Dropping {len(dropcol)} columns")
-    df = df.drop(columns=dropcol)
+    if event is not None:
+        # Only want single event type starting with event substring.
+        rptcols = [f"{event}_{rptdist}km_{twin}hr"]
+
     return df, rptcols
 
 def get_glm(time_space_windows, date=None):
@@ -718,7 +723,11 @@ def normalize_multivariate_data(data, features, scaling_values=None, nonormalize
     return normed_data, scaling_values
 
 
-def savedmodel_default(args, odir="nn"):
+def get_savedmodel_path(args, odir="nn"):
+    # Use path requested on command line, if available.
+    if args.savedmodel is not None:
+        return args.savedmodel
+
     # optimizer could be 'adam' or SGD from Sobash 2020
     optimizer = get_optimizer(args.optimizer)
    
@@ -730,7 +739,7 @@ def savedmodel_default(args, odir="nn"):
         batchnorm_str = ""
 
     glmstr = "" # GLM description 
-    if args.glm: glmstr = f"{args.flash}flash." # flash rate threshold and GLM time window
+    if args.glm: glmstr = f"{args.flash:02d}flash." # zero-padded flash count threshold
         
     neurons_str = ''.join([f"{x}n" for x in args.neurons]) # [1024] -> "1024n", [16,16] -> "16n16n"
     savedmodel  = f"{odir}/{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{neurons_str}.ep{args.epochs}.{fhr_str}."

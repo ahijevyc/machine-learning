@@ -5,7 +5,7 @@ from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, load_df, rptdist2bool, savedmodel_default
+from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, load_df, rptdist2bool, get_savedmodel_path
 import multiprocessing
 import numpy as np
 import os
@@ -20,7 +20,7 @@ import xarray
 import yaml
 
 """
- test neural network(s) in parallel. output truth and predictions from each member and ensemble mean for each forecast hour
+ test neural network(s) in parallel. output truth and predictions from each fit and ensemble mean for each forecast hour
  Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
  execcasper --ngpus 13 --mem=50GB # gpus not neeeded for verification
 """
@@ -41,7 +41,6 @@ kfold = args.kfold
 nfit = args.nfits
 nprocs = args.nprocs
 rptdist = args.rptdist
-savedmodel = args.savedmodel
 testend = args.testend
 teststart = args.teststart
 suite = args.suite
@@ -51,11 +50,8 @@ if debug:
     logging.basicConfig(level=logging.DEBUG)
 
 
-### saved model name ###
-if savedmodel:
-    pass
-else:
-    savedmodel = savedmodel_default(args)
+### saved model path ###
+savedmodel = get_savedmodel_path(args)
 logging.info(f"savedmodel={savedmodel}")
 
 for ifold in range(kfold):
@@ -72,38 +68,11 @@ for ifold in range(kfold):
 
 df = load_df(args)
 
-df, rptcols = rptdist2bool(df, args)
+logging.info("convert report distance and flash count to True/False labels")
+df, label_cols = rptdist2bool(df, args)
 
-# This script expects MultiIndex valid_time, projection_y_coordinate, projection_x_coordinate (t, ew, ns)
-if df.index.names == ["valid_time", "projection_y_coordinate", "projection_x_coordinate"]:
-    pass
-else:
-    xs = df.index.get_level_values(level="x")
-    ys = df.index.get_level_values(level="y")
-    if xs.min() == 21 and xs.max() == 80 and ys.min() == 12 and ys.max() == 46:
-        rdict = {"y": "projection_x_coordinate",
-                 "x": "projection_y_coordinate"}
-        logging.info(f"renaming axes {rdict}")
-        # NSC3km-12sec saved as forecast_hour, y, x
-        df = df.rename_axis(index=rdict)
-    elif ys.min() == 21 and ys.max() == 80 and xs.min() == 12 and xs.max() == 46:
-        rdict = {"x": "projection_x_coordinate",
-                 "y": "projection_y_coordinate"}
-        logging.info(f"renaming axes {rdict}")
-        # NSC3km-12sec saved as forecast_hour, y, x
-        df = df.rename_axis(index=rdict)
-    else:
-        logging.error(
-            "unexpected x and y coordinates. check mask, training script, parquet file...")
-        sys.exit(1)
+assert set(df.index.names) == set(['valid_time', 'x', 'y']), f"unexpected index names for df {df.index.names}"
 
-
-assert set(df.index.names) == set(['valid_time', 'projection_x_coordinate',
-                                   'projection_y_coordinate']), f"unexpected index names for df {df.index.names}"
-
-# This script expects "forecast_hour" spelled out.
-df = df.rename(columns={"fhr": "forecast_hour",
-               "init_time": "initialization_time"})
 
 # Make initialization_time a MultiIndex level
 df = df.set_index("initialization_time", append=True)
@@ -137,19 +106,18 @@ if not clobber and os.path.exists(ofile):
 
 logging.info(f"output file will be {ofile}")
 
-before_filtering = len(df)
 # Used to test all columns for NA, but we only care about the feature subset being complete.
 # For example, mode probs are not avaiable for fhr=2 but we don't need to drop fhr=2 if
 # the other features are complete.
-features = get_features(args)
+feature_list = get_features(args)
 logging.info(
-    f"Retain rows where all {len(features)} requested features are present")
-df = df.loc[df[features].notna().all(axis="columns"), :]
-logging.info(f"kept {len(df)}/{before_filtering} cases with no NA features")
+    f"Retain rows where all {len(feature_list)} requested features are present")
+beforedropna = len(df)
+df = df.dropna(axis="index", subset=feature_list)
+logging.info(f"kept {len(df)}/{beforedropna} cases with no NA features")
 
-logging.info(f"Split {len(rptcols)} labels away from predictors")
-labels = df[rptcols]  # labels converted to Boolean above
-df = df.drop(columns=rptcols)
+logging.info(f"Split {len(label_cols)} labels away from predictors")
+labels = df[label_cols]  # labels converted to Boolean above
 
 df.info()
 print(labels.sum())
@@ -158,9 +126,9 @@ assert labels.sum().all() > 0, "at least 1 class has no True labels in testing s
 
 
 columns_before_filtering = df.columns
-df = df[features]
+df = df[feature_list]
 logging.info(
-    f"dropped features {set(columns_before_filtering) - set(df.columns)}")
+    f"dropped {set(columns_before_filtering) - set(df.columns)}")
 logging.info(
     f"kept {len(df.columns)}/{len(columns_before_filtering)} features")
 
@@ -238,7 +206,7 @@ def statjob(fhr, statcurves=None):
                 f"predicting fhr {fhr}  fit {thisfit}  fold{ifold}...")
             norm_features = (features - sv.loc["mean"]) / sv.loc["std"]
             # Grab numpy array of predictions.
-            Y = model.predict(norm_features.to_numpy(dtype='float32'))
+            Y = model.predict(norm_features.to_numpy(dtype='float32'), batch_size=20000)
             # Put prediction numpy array into DataFrame with index (row) and column labels.
             Y = pd.DataFrame(Y, columns=labels_fold_fhr.columns,
                              index=features.index)
@@ -268,8 +236,7 @@ def statjob(fhr, statcurves=None):
     # I may have overlapping valid_times from different init_times like fhr=1 from today and fhr=25 from previous day
     # average probability over all nfits initialized at initialization_time and valid at valid_time
     ensmean = y_preds.groupby(level=[
-        "valid_time", "projection_y_coordinate",
-        "projection_x_coordinate", "initialization_time"
+        "valid_time", "y", "x", "initialization_time"
     ]).mean()
     assert "fit" not in ensmean.index.names, "fit should not be a MultiIndex level of ensmean, the average probability over nfits."
     # for statistic curves plot file name
@@ -333,9 +300,8 @@ else:
     for fhr in fhrs:
         data.append(statjob(fhr))
 
-
 with open(ofile, "w") as fh:
-    fh.write('class,mem,fold,forecast_hour,bss,base rate,auc,aps,n\n')
+    fh.write('class,fit,fold,forecast_hour,bss,base_rate,auc,aps,n\n')
     fh.write(''.join(data))
 
 logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")
