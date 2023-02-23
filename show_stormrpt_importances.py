@@ -1,12 +1,9 @@
-from collections import defaultdict
 import datetime
 import glob
 import visualizecv
-import hwtmode
-import hwtmode.data
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, rptdist2bool
+from ml_functions import get_argparser, get_features, get_savedmodel_path, load_df, rptdist2bool
 import numpy as np
 import os
 import pandas as pd
@@ -19,7 +16,7 @@ import sklearn
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LinearRegression, LogisticRegression
-from sklearn.model_selection import cross_val_score, GroupKFold, KFold, StratifiedKFold, StratifiedGroupKFold
+from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
@@ -31,26 +28,31 @@ import xarray
 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
-#np.random.seed(14)
+parser = get_argparser()
+args = parser.parse_args()
+logging.info(args)
 
-neurons = 16 
-batch_size = 512 # Default is min(200, n_samples) if batch_size is around 25 or larger, ConvergenceWarning: Stochastic Optimizer: Maximum iterations (200) reached and the optimization hasn't converged yet.
+
+batchsize = args.batchsize # Default is min(200, n_samples) if batch_size is around 25 or larger, ConvergenceWarning: Stochastic Optimizer: Maximum iterations (200) reached and the optimization hasn't converged yet.
+neurons = args.neurons 
+seed = args.seed
 #models = [LinearRegression(), LogisticRegression(), DecisionTreeRegressor(), RandomForestRegressor(), XGBRegressor(), KNeighborsRegressor(), MLPClassifier(hidden_layer_sizes=(neurons,neurons))]
 #models = [RandomForestRegressor(n_estimators=150), MLPClassifier(hidden_layer_sizes=(neurons,neurons))]
 models = [] # if you just want matrix and dendrogram
-models = [MLPClassifier(hidden_layer_sizes=(neurons,neurons),batch_size=batch_size)]
-scoring = 'accuracy'
+models = [MLPClassifier(hidden_layer_sizes=neurons,batch_size=batchsize)]
+scoring = 'balanced_accuracy'
 
-dist_thresholds = [1]
 dist_thresholds = [2.5, 2, 1.5, 1, 0.5, .25, 0]
+dist_thresholds = [1]
 
+np.random.seed(seed)
 
 def corr_dendro_plot(X, suite=None, dist_thresholds=dist_thresholds, importances=None, figh=14):
     features = X.columns
     logging.info(f"corr_dendro_plot: {len(features)} features suite={suite} dist_thresholds={dist_thresholds} importances={importances} figh={figh}")
     corr = spearmanr(X).correlation # just training data
 
-    # Ensure the correlation matrix is symmetric
+    logging.info("Ensure the correlation matrix is symmetric")
     corr = (corr + corr.T) / 2
     np.fill_diagonal(corr, 1)
 
@@ -86,7 +88,7 @@ def corr_dendro_plot(X, suite=None, dist_thresholds=dist_thresholds, importances
             # merge importance and cluster_id columns into single DataFrame
             pm = pd.concat([importances, pd.Series(cluster_ids, index=features, name="cluster_id")], axis=1)
             selected_features = pm.groupby("cluster_id")["importance"].idxmax() # get feature with max importance
-            print(len(features), "to", len(selected_features), "features", selected_features.to_list())
+            logging.info(f"{len(features)} to {len(selected_features)} features {selected_features.to_list()}")
             fontsize=yticklabels[0].get_fontsize() + d*8 # starting with current ticklabel fontsize get bigger to the right.
             for c, fs in pm.groupby("cluster_id"):
                 # label one member of each cluster
@@ -97,131 +99,133 @@ def corr_dendro_plot(X, suite=None, dist_thresholds=dist_thresholds, importances
 
 
         fig.tight_layout()
-        ofile = os.path.realpath(f"{suite}_{d}_dendro.png")
+        ofile = os.path.join(os.getenv("TMPDIR"), f"{suite}_{d:4.2f}_dendro.png")
+        ofile = os.path.realpath(ofile)
         plt.savefig(ofile)
-        print(ofile)
+        logging.info(f"created {ofile}")
         plt.close()
     return dist_linkage
 
 
 
 def main():
-    model = "NSC3km-12sec"
-    suite = "with_storm_mode"
-    glmstr=""
-    teststart = pd.to_datetime("20160701")
+    clobber = args.clobber
+    fhr = args.fhr
     figh=14
-    ifile0 = f'{model}{glmstr}.par'
-    scalingfile = f"scaling_values_{model}_{teststart:%Y%m%d_%H%M}.pk"
-    logging.info(f"read parquet {ifile0}")
-    df = pd.read_parquet(ifile0, engine="pyarrow")
+    kfold = args.kfold
+    rptdist = args.rptdist
+    savedmodel = get_savedmodel_path(args)
+    suite = args.suite
 
-    # split into train and test.
-    train_idx = df["initialization_time"] < teststart
+    df = load_df(args)
+    df, label_cols = rptdist2bool(df, args)
 
-    rptdist = 40
-    twin = 2
-    logging.info(f"events in {rptdist}km and {twin}h window")
-    df, rptcols = rptdist2bool(df, args)
+    # Make initialization_time a MultiIndex level
+    df = df.set_index("initialization_time", append=True)
 
-    logging.info(f"split labels {rptcols} from DataFrame")
-    labels = df[rptcols]
-    df = df.drop(columns=rptcols)
+    validtimes = df.index.get_level_values(level="valid_time")
+    logging.info(f"range of valid times: {validtimes.min()} - {validtimes.max()}")
 
-    logging.info(f"normalize with training cases mean and std in {scalingfile}.")
-    sv = pd.read_pickle(scalingfile) # conda activate tf if AttributeError: Can't get attribute 'new_block' on...
+    # Used to test all columns for NA, but we only care about the feature subset being complete.
+    # For example, mode probs are not available for fhr=2 but we don't need to drop fhr=2 if
+    # the other features are complete.
+    feature_list = get_features(args)
+    logging.info(
+        f"Retain rows where all {len(feature_list)} requested features are present")
+    beforedropna = len(df)
+    df = df.dropna(axis="index", subset=feature_list)
+    logging.info(f"kept {len(df)}/{beforedropna} cases with no NA features")
 
-    # You might have scaling factors for columns that you dropped already, like -N7 columns.
-    extra_sv_columns = set(sv.columns) - set(df.columns)
-    if extra_sv_columns:
-        logging.info(f"dropping {len(extra_sv_columns)} extra scaling factor columns {extra_sv_columns}")
-        sv = sv.drop(columns=extra_sv_columns)
+    before_filtering = len(df)
+    logging.info(f"Retain rows with requested forecast hours {fhr}")
+    df = df.loc[df["forecast_hour"].isin(fhr)]
+    logging.info(
+        f"kept {len(df)}/{before_filtering} rows with requested forecast hours")
 
-    # TODO: make sure time formats match 
-    # Avoid numpy.core._exceptions.UFuncTypeError: ufunc 'subtract' cannot use operands with types dtype('<M8[ns]') and dtype('float64')
-    logging.info("normalizing")
-    df = (df - sv.loc["mean"]) / sv.loc["std"]
+    logging.info(f"Split {len(label_cols)} labels away from predictors")
+    labels = df[label_cols]  # labels converted to Boolean above
+
+    print(labels.sum())
+
+    columns_before_filtering = df.columns
+    df = df[feature_list]
+    logging.info(
+        f"dropped {set(columns_before_filtering) - set(df.columns)}")
+    logging.info(
+        f"kept {len(df.columns)}/{len(columns_before_filtering)} features")
 
     # Without providing a list of importances, this won't label the best member from each cluster.
-    dist_linkage = corr_dendro_plot(df[train_idx], suite=suite, dist_thresholds=dist_thresholds, figh=figh)
+    dist_linkage = corr_dendro_plot(df, suite=suite, dist_thresholds=dist_thresholds, figh=figh)
 
 
-    n_splits = 5 
-    cv = GroupKFold(n_splits=n_splits)
-    # Also tried StratifiedGroupKFold. GroupKFold tries to keep same number of groups in each fold; class percentanges are a little uneven.
-    # https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.StratifiedGroupKFold.html#sklearn.model_selection.StratifiedGroupKFold says
-    # GroupKFold attempts to create balanced folds so # of distinct groups is approximately the same in each fold, whereas StratifiedGroupKFold attempts to 
-    # create folds that preserve percentage of samples for each class as much as possible given the constraint of non-overlapping groups between splits.
+    logging.info("normalize predictors")
+    mean = df.mean()
+    std  = df.std()
+    df = (df - mean) / std
+    logging.info('done normalizing')
 
-    group = LabelEncoder().fit_transform(df.Run_Date)
-    plot_splits= False
-    if plot_splits:
-        fig, ax = plt.subplots()
-        visualizecv.plot_cv_indices(cv, df[train_idx], labels[train_idx], group[train_idx], ax, n_splits)
-        plt.show()
+    X_train, X_val, y_train, y_val = train_test_split(df, labels, random_state=seed)
 
-    n_repeats = 5 #50
-    explabel = f"neurons={neurons} {labelpick} label\nbatch size={batch_size} scoring={scoring}"
-    explabel += f"\npermutation importance\n(mean drop in {scoring} from permuting feature)\nrepeated {n_repeats} times * {n_splits} cv splits"
+    #label_cols = ["flashes_40km_2hr"]
+    for labelpick in label_cols:
+        n_repeats = 25
+        explabel = f"neurons={neurons} {labelpick}\nbatch size={batchsize} scoring={scoring}"
+        explabel += f"\npermutation importance\n(mean drop in {scoring} from permuting feature)\nrepeated {n_repeats}x"
 
-    if not models:
-        sys.exit(0)
+        assert models
 
-    # HACK for just 1st model. get importances so we can choose the predictor with highest importance in each cluster 
-    model = models[0]
-    ofile = os.path.realpath(f"{suite}_{neurons}neurons_{labelpick}label_{class_startswith}_bs{batch_size}_{n_splits}x{n_repeats}_imp.csv")
-    if os.path.exists(ofile):
-        feature_df = pd.read_csv(ofile, index_col=0)
-    else:
-        print(f"permutation importances n={n_repeats}")
-        pis = np.zeros((len(features), n_repeats*n_splits)) # empty numpy array, a row for each features, and a column for each importance
-        for i, (train,test) in enumerate(cv.split(X[train_idx],y[train_idx],group[train_idx])):
-            X_split = X[train_idx].iloc[train]
-            y_split = y[train_idx][train]
-            fittedestimator = model.fit(X_split, y_split)
-            pi = permutation_importance(estimator=fittedestimator, X=X_split, y=y_split, scoring=scoring, n_repeats=n_repeats).importances
-            pis[:,i*n_repeats:(i+1)*n_repeats] = pi
-            print(f"cross validation split {i}/{n_splits}")
-        feature_df = pd.DataFrame(pis, index=features)
-        feature_df.to_csv(ofile)
-    print(ofile)
-    ax = feature_df.T.boxplot(figsize=(18, 5),rot=90)
-    ax.set_ylabel(explabel)
-    ax.set_title(type(model).__name__)
-    plt.tight_layout()
-    ofile = os.path.realpath(f"{suite}_{neurons}neurons_{labelpick}label_{class_startswith}_bs{batch_size}_imp_barplot.png")
-    plt.savefig(ofile)
-    print(ofile)
-    plt.close()
+        # HACK for just 1st model and all folds. get importances so we can choose the predictor with highest importance in each cluster 
+        model = models[0]
+        ofile = os.path.join(os.getenv("TMPDIR"), f"{savedmodel}_{n_repeats}repeats.{labelpick}.csv")
+        ofile = os.path.realpath(ofile)
+        if os.path.exists(ofile):
+            logging.info(f"read {ofile}")
+            imp_df = pd.read_csv(ofile, index_col=0)
+        else:
+            logging.info(f"train to predict {labelpick} with {len(X_train)} cases")
+            fittedestimator = model.fit(X_train, y_train[labelpick])
+            logging.info(f"score {len(X_val)} cases")
+            score = sklearn.metrics.accuracy_score(y_val[labelpick], fittedestimator.predict(X_val))
+            logging.info(f"accuracy {score}")
+            score = sklearn.metrics.balanced_accuracy_score(y_val[labelpick], fittedestimator.predict(X_val))
+            logging.info(f"{labelpick} balanced accuracy {score}")
+            logging.info(f"calculate permutation importance on {len(X_val)} cases. n_repeats={n_repeats}")
+            history = permutation_importance(fittedestimator, X_val, y_val[labelpick], scoring=scoring, n_repeats=n_repeats, n_jobs=-1)
+            imp_df = pd.DataFrame(history.importances, index=fittedestimator.feature_names_in_)
+            imp_df.to_csv(ofile)
+            logging.info(f"created {ofile}")
+        ax = imp_df.T.boxplot(figsize=(18, 5),rot=90)
+        ax.set_ylabel(explabel)
+        ax.set_title(type(model).__name__)
+        plt.tight_layout()
+        ofile = os.path.join(os.getenv("TMPDIR"), f"{savedmodel}_{labelpick}_bar.png")
+        ofile = os.path.realpath(ofile)
+        plt.savefig(ofile)
+        logging.info(f"created {ofile}")
+        plt.close()
 
-    feature_df["importance"] = feature_df.mean(axis="columns")
+        continue
 
-    #Redo dendrograms with labels of best importance
-    dist_linkage = corr_dendro_plot(X[train_idx], suite=suite, dist_thresholds=dist_thresholds, figh=figh, importances=feature_df["importance"])
+        imp_df["importance"] = imp_df.mean(axis="columns")
 
-    for dist_threshold in dist_thresholds:
-        cluster_ids = hierarchy.fcluster(dist_linkage, dist_threshold, criterion="distance")
-        feature_df["cluster_id"] = cluster_ids
-        selected_features = feature_df.groupby("cluster_id")["importance"].idxmax()
-        print(len(features), "to", len(selected_features), "features", selected_features.to_list())
+        #Redo dendrograms with labels of best importance
+        dist_linkage = corr_dendro_plot(df, suite=suite, dist_thresholds=dist_thresholds, figh=figh, importances=imp_df["importance"])
 
-        X_train_sel = X[train_idx][selected_features]
+        for dist_threshold in dist_thresholds:
+            cluster_ids = hierarchy.fcluster(dist_linkage, dist_threshold, criterion="distance")
+            imp_df["cluster_id"] = cluster_ids
+            selected_features = imp_df.groupby("cluster_id")["importance"].idxmax()
+            logging.info(f"{len(feature_list)} to {len(selected_features)} features {selected_features.to_list()}")
 
-        if models:
             fig, axes = plt.subplots(ncols=len(models), figsize=(len(models)*5, figh))
             if len(models) == 1: axes = np.array(axes) # avoid AttributeError: 'AxesSubplot' object has no attribute 'flatten'
             for ax, model in zip(axes.flatten(),models):
-                scores = cross_val_score(estimator=model, X=X_train_sel, y=y[train_idx], groups=group[train_idx], cv=cv)
-                print(f"dist_threshold={dist_threshold} {type(model).__name__} {scores} mean: {np.array(scores).mean()} std: {np.array(scores).std()}")
+                logging.info(f"dist_threshold={dist_threshold} {type(model).__name__} {scores} mean: {np.array(scores).mean()} std: {np.array(scores).std()}")
                 if type(model).__name__ in ["KNeighborsRegressor","MLPClassifier"]:
-                    pis = np.zeros((len(selected_features), n_repeats*n_splits)) # empty numpy array, a row for each features, and a column for each importance
-                    for i, (train,test) in enumerate(cv.split(X_train_sel,y[train_idx],group[train_idx])):
-                        X_split = X_train_sel.iloc[train]
-                        y_split = y[train_idx][train]
-                        fittedestimator = model.fit(X_split, y_split)
-                        pi = permutation_importance(estimator=fittedestimator, X=X_split, y=y_split, scoring=scoring, n_repeats=n_repeats).importances
-                        pis[:,i*n_repeats:(i+1)*n_repeats] = pi
-                    pis = pd.DataFrame(pis, index=selected_features)
+                    fittedestimator = model.fit(X_train[selected_features], y_train[labelpick])
+                    history = permutation_importance(fittedestimator, X_val[selected_features], y_val[labelpick], 
+                            scoring=scoring, n_repeats=n_repeats, n_jobs=-1)
+                    pis = pd.DataFrame(history.importances, index=selected_features)
                 for attr in ["coef_","feature_importances_"]:
                     if hasattr(model, attr):
                         importance = getattr(model,attr)
@@ -236,49 +240,16 @@ def main():
                 pis.T.boxplot(ax=ax, vert=False)
                 ax.set_title(type(model).__name__)
             fig.tight_layout()
-            if class_startswith:
-                plt.suptitle(f"class starts with {class_startswith}")
-            ofile = os.path.realpath(f"{suite}_{dist_threshold}_{neurons}neurons_{labelpick}label_{class_startswith}_bs{batch_size}_imp_barplot.png")
+            ofile = os.path.join(os.getenv("TMPDIR"), f"{savedmodel}_{dist_threshold}_{labelpick}_imp_barplot.png")
+            ofile = os.path.realpath(ofile)
             plt.savefig(ofile)
             print(ofile)
             plt.close()
 
 if __name__ == "__main__":
     if False:
-        static_file = os.path.join('/glade/scratch/ahijevyc/temp/t.par')
-        if os.path.exists(static_file):
-            df = pd.read_parquet(static_file)
-        else:
-            ifiles = glob.glob(f'/glade/work/sobash/NSC_objects/HRRR/grid_data/grid_data_HRRR_d01_2020052400-0000.par')
-            df = pd.concat(pd.read_parquet(ifile) for ifile in ifiles)
-            df["time"] = pd.to_datetime(df["Date"]) + df["fhr"] * datetime.timedelta(hours=1)
-            idate = df.Date.astype('datetime64[ns]')
-            df = df.drop(columns="Date")
-            
-            df["Local_Solar_Hour"] = df["time"].dt.hour + df["lon"]/15
-            df = df.rename(columns=dict(xind="projection_y_coordinate",yind="projection_x_coordinate"))
-            df = df.set_index(["time","projection_y_coordinate","projection_x_coordinate"])
-            glm = xarray.open_dataset("/glade/scratch/ahijevyc/temp/GLM_all.nc")
-            assert (glm.time_coverage_start[1] - glm.time_coverage_start[0]) == np.timedelta64(3600,'s'), 'glm.time_coverage_start interval not 1h'
-            # Add flashes from previous 2 times and next time to current time. 4-hour centered time window 
-            glm = glm + glm.shift(time_coverage_start=2) + glm.shift(time_coverage_start=1) + glm.shift(time_coverage_start=-1)
-            print("Merge flashes with df")
-            df = df.merge(glm.to_dataframe(), left_on=["time","projection_y_coordinate","projection_x_coordinate"], right_index=True)
-
-            # speed things up without multiindex
-            df = df.reset_index(drop=True)
-            # Local solar time, sin and cos components
-            df = hwtmode.data.decompose_circular_feature(df, "Local_Solar_Hour", period=24)
-
-            rptdist = 40
-            # Convert severe report distance to boolean (0-rptdist = True)
-            for r in ["sighail", "sigwind", "hailone", "wind", "torn"]:
-                for h in ["0","1","2"]:
-                    rh = f"{r}_rptdist_{h}hr"
-                    df[rh] = (df[rh] >= 0) & (df[rh] < rptdist)
-            df.to_parquet(static_file, compression=None)
-        print(static_file)
-        y = df["wind_rptdist_2hr"] 
+        df = load_df(args)
+        y = df["wind_40km_2hr"] 
         X = df.drop(columns=[x for x in df.columns if x.endswith("hr")])
         # normalize data 
         mean = X.mean()
