@@ -11,7 +11,7 @@ def brier_skill_score(obs, preds):
     bss = 1.0 - (bs/bs_climo+K.epsilon())
     return bss
 
-def baseline_model(input_dim=None, numclasses=None, num_neurons=30, optimizer='adam', dropout=0):
+def baseline_model(input_dim=None, numclasses=None, num_neurons=30, optimizer='Adam', dropout=0):
 
     # Discard any pre-existing version of the model.
     model = Sequential()
