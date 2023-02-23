@@ -6,36 +6,42 @@ g211 = cartopy.crs.LambertConformal(central_longitude=-95, standard_parallels=(2
 width=93
 height=65
 
-llcrnrlon = -133.459
-llcrnrlat=12.19
-urcrnrlon=-49.38641
-urcrnrlat=57.2894
-lons = np.array([llcrnrlon, urcrnrlon])
-lats = np.array([llcrnrlat, urcrnrlat])
+ll_lon = -133.459
+ll_lat=12.19
+ur_lon=-49.38641
+ur_lat=57.2894
 
-projected_corners = g211.transform_points(
-    cartopy.crs.PlateCarree(), lons, lats)
+# lower left and upper right projection coordinates
+(llx, lly, llz), (urx ,ury, urz) = g211.transform_points(
+    cartopy.crs.PlateCarree(),
+    np.array([ll_lon, ur_lon]),
+    np.array([ll_lat, ur_lat])
+    )
 
-xs = np.linspace( projected_corners[0, 0], projected_corners[1, 0], width)
-ys = np.linspace( projected_corners[0, 1], projected_corners[1, 1], height)
+# gridded projection coordinates xv, yv
+xs = np.linspace( llx, urx, width)
+ys = np.linspace( lly, ury, height)
 xv, yv = np.meshgrid(xs,ys)
-llz = cartopy.crs.PlateCarree().transform_points(g211,xv,yv)
-lon = llz[:,:,0]
-lat = llz[:,:,1]
+# gridded lat/lon coordinates lat, lon
+ll3 = cartopy.crs.PlateCarree().transform_points(g211,xv,yv)
+lon = ll3[:,:,0]
+lat = ll3[:,:,1]
 
+
+# TODO: clean up this kludge
 def x2():
     """
-    Half spacing (40km) compared to G211 (80km)
+    Half spacing compared to G211
     """
-    global projected_corners
+    global ll_lon, ll_lat, ur_lon, ur_lat
     width=93 * 2
     height=65 * 2
 
-    xs = np.linspace( projected_corners[0, 0], projected_corners[1, 0], width)
-    ys = np.linspace( projected_corners[0, 1], projected_corners[1, 1], height)
+    xs = np.linspace( llx, urx, width)
+    ys = np.linspace( lly, ury, height)
     xv, yv = np.meshgrid(xs,ys)
-    llz = cartopy.crs.PlateCarree().transform_points(g211,xv,yv)
-    lon = llz[:,:,0]
-    lat = llz[:,:,1]
+    ll3 = cartopy.crs.PlateCarree().transform_points(g211,xv,yv)
+    lon = ll3[:,:,0]
+    lat = ll3[:,:,1]
     return lon, lat
 
