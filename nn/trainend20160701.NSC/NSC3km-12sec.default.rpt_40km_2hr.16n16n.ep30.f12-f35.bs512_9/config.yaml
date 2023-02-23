@@ -70,7 +70,8 @@ args: !!python/object:argparse.Namespace
   - null
   - null
   suite: default
-  twin: 2
+  twin:
+  - 2
 columns:
 - forecast_hour
 - UP_HELI_MAX120-N1T5
