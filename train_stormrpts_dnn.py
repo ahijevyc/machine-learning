@@ -1,7 +1,7 @@
 import datetime
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import get_argparser, get_features, get_optimizer, load_df, rptdist2bool, get_savedmodel_path
+from ml_functions import Dumper, get_argparser, get_features, get_optimizer, load_df, rptdist2bool, get_savedmodel_path
 import numpy as np
 import os
 import pandas as pd
@@ -20,7 +20,7 @@ import yaml
 
 
 def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], kernel_regularizer=None,
-                   optimizer_name='adam', dropout=0, batch_normalize=False, learning_rate=0.01):
+                   optimizer_name='Adam', dropout=0, batch_normalize=False, learning_rate=0.01):
 
     # Discard any pre-existing version of the model.
     model = tf.keras.models.Sequential(name=name)
@@ -45,7 +45,10 @@ def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], 
     return model
 
 
+# maybe delete this function. It returns a list of model_dates that have a corresponding mode file.
 def modedate(modeprob_files, model_dates):
+    logging.warning("I didn't think this was needed")
+    sys.exit(1)
     model_dates = pd.to_datetime(np.unique(model_dates))
     pattern = r'/20\d\d[01][0-9][0123][0-9][012][0-9][0-5][0-9]'
     filtered_ifiles = []
@@ -184,18 +187,16 @@ def main():
     logging.info(f"dropped {set(before_filtering) - set(df.columns)}")
     logging.info(f"kept {len(df.columns)}/{len(before_filtering)} features")
 
-    logging.info(f"calculating mean and std scaling values")
+    logging.info(f"calculating mean and standard dev scaling values")
     sv = df.describe()
 
     # Check for zero standard deviation. (can't normalize)
     stdiszero = sv.loc["std"] == 0
     if stdiszero.any():
-        logging.error(f"{sv.columns[stdiszero]} std equals zero")
+        logging.error(f"{sv.columns[stdiszero]} standard dev equals zero")
     logging.info(f"normalize data")
     df = (df - sv.loc["mean"]) / sv.loc["std"]
     logging.info('done normalizing')
-
-    df.info()
 
     if df.describe().isna().any().any():
         logging.error(f"nan(s) in {df.columns[df.mean().isna()]}")
@@ -232,7 +233,7 @@ def main():
                 logging.info(f"fitting {model_i}")
                 model = baseline_model(input_dim=df.columns.size, numclasses=labels.columns.size, neurons=neurons, name=f"fit_{i}",
                                        kernel_regularizer=L2(l2=reg_penalty), optimizer_name=optimizer_name, dropout=dropout, learning_rate=learning_rate)
-                history = model.fit(df.iloc[train_split].to_numpy(dtype='float32'), labels.iloc[train_split].to_numpy(dtype='float32'), class_weight=None,
+                model.fit(df.iloc[train_split].to_numpy(dtype='float32'), labels.iloc[train_split].to_numpy(dtype='float32'), class_weight=None,
                                     sample_weight=None, batch_size=batchsize, epochs=epochs, verbose=2)
                 logging.debug(f"saving {model_i}")
                 model.save(model_i)
@@ -246,7 +247,7 @@ def main():
                              std=sv.loc["std"].reindex(df.columns).to_list(),
                              labels=labels.columns.to_list(),
                              args=args,
-                             ), yfile)
+                             ), yfile) # , Dumper=Dumper)
 
 
 if __name__ == "__main__":
