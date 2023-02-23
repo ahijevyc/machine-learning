@@ -20,6 +20,28 @@ from tensorflow.keras import optimizers
 import time, os
 import xarray
 
+
+# write and read safe yaml. write argparse.Namespace as dictionary and 
+# timestamps as strings
+# experiment with this in ~ahijevyc/yaml_config.ipynb
+from yaml import CSafeDumper
+from yaml.representer import SafeRepresenter
+
+class Dumper(CSafeDumper):
+    pass
+
+def timestamp_representer(dumper, data):
+    return SafeRepresenter.represent_datetime(dumper, pd.Timestamp(data))
+
+def namespace_representer(dumper, data):
+    return SafeRepresenter.represent_dict(dumper, data.__dict__)
+
+Dumper.add_representer(pd.Timestamp, timestamp_representer)
+Dumper.add_representer(argparse.Namespace, namespace_representer)
+
+
+
+
 def log(msg, flush=True):
     print( time.ctime(time.time()), msg , flush=flush)
 
@@ -47,14 +69,15 @@ def configs_match(ylargs, args):
     testend   = args.testend
     overlap = min([trainend, testend]) - max([trainstart, teststart])
     if overlap >= datetime.timedelta(hours=0) and args.kfold == 1:
-        logging.warning(f"training and testing time ranges overlap {trainstart}-{trainend}|{teststart}-{testend}")
+        logging.warning(f"training and testing time ranges overlap [{trainstart},{trainend}] [{teststart},{testend}]")
    
-    # Comparing config.yaml training period and requested training period (args) is not a good test because config.yaml bounds are "trimmed"
-    # to actual training data. config.yaml training period may be subset of the requested training period in args.
-    # If any of the actual "trimmed" training period is outside the requested training period, this is a problem.
+    # Comparing yaml config training period and requested training period (args) is not a good test 
+    # because yaml config bounds are trimmed to actual range of training cases.
+    # config training period may be subset of the requested training period in args, but if any of the actual "trimmed" training period
+    # beyond the range of the requested training period, this is a problem.
     # args.trainstart <= trainstart            trainend <= args.trainend
-    assert args.trainstart <= trainstart, f"Requested training period {args.trainstart}-{args.trainend} starts after actual 'trimmed' training period {trainstart}-{trainend} starts"
-    assert trainend <= args.trainend,     f"Requested training period {args.trainstart}-{args.trainend} ends before actual 'trimmed' training period {trainstart}-{trainend} ends"
+    assert args.trainstart <= trainstart, (f"requested start of training period {args.trainstart} is after actual training period [{trainstart},{trainend}]")
+    assert trainend <= args.trainend,     (f"requested end of training period {args.trainend} is before actual training period [{trainstart},{trainend}]")
     for key in ["batchnorm", "batchsize", "dropout", "epochs", "flash", "fhr", "glm", "kfold", "learning_rate", "model", "neurons",
                 "optimizer", "reg_penalty", "rptdist", "suite", "twin"]:
         assert getattr(ylargs, key) == getattr(
@@ -89,7 +112,7 @@ def get_argparser():
     parser.add_argument('--neurons', type=int, nargs="+", default=[16,16], help="number of neurons in each nn layer")
     parser.add_argument('--nfits', type=int, default=5, help="number of times to fit (train) model")
     parser.add_argument('--nprocs', type=int, default=0, help="verify this many forecast hours in parallel")
-    parser.add_argument('--optimizer', type=str, choices=['adam','sgd'], default='adam', help="optimizer")
+    parser.add_argument('--optimizer', type=str, choices=['Adam','SGD'], default='Adam', help="optimizer")
     parser.add_argument('--reg_penalty', type=float, default=0.01, help="L2 regularization factor")
     parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
     parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
@@ -99,14 +122,15 @@ def get_argparser():
     parser.add_argument('--testend', type=lambda s: pd.to_datetime(s), default="20220101T00", help="testing set end")
     parser.add_argument('--teststart', type=lambda s: pd.to_datetime(s), default="20201202T12", help="testing set start")
     parser.add_argument('--suite', type=str, default='default', help="name for suite of training features")
-    parser.add_argument('--twin', type=int, default=2, help="time window in hours")
+    parser.add_argument('--twin', nargs="+", type=int, default=[0,1,2], help="time window(s) in hours")
 
     return parser
 
 
 def full_cmd(args):
     """
-    Given a argparse Namespace, return complete argument string suitable for shell command line.
+    Given a argparse Namespace, reverse engineer the string of arguments that would create it. 
+    String is suitable for shell command line.
     Format datetimes as strings.
     Just print keyword if its value is Boolean and True.
     Skip keyword and value if its value is Boolean and False.
@@ -129,9 +153,9 @@ def full_cmd(args):
     return s + "\n"
 
 def get_optimizer(s, learning_rate = 0.001, **kwargs):
-    if s == 'adam':
+    if s == 'Adam':
         o = optimizers.Adam(learning_rate = learning_rate)
-    elif s == 'sgd':
+    elif s == 'SGD':
         #learning_rate = 0.001 # from sobash
         momentum = 0.99
         nesterov = True
@@ -139,11 +163,12 @@ def get_optimizer(s, learning_rate = 0.001, **kwargs):
     return o
 
 
-def load_df(args, idir="/glade/work/sobash/NSC_objects"):
+def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaign/mmm/parc/ahijevyc/wbug_lightning"):
     debug = args.debug
     idate = args.idate
     ifile = args.ifile
     model = args.model
+    rptdist = args.rptdist
 
     # Define input filename.
     if ifile is None:
@@ -155,17 +180,18 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects"):
         elif model.startswith("NSC"):
             ifile = f'{model}.par'
             if debug:
-                ifile = f'/glade/work/ahijevyc/NSC_objects/{model}_old.par'
+                ifile = f'/glade/work/ahijevyc/NSC_objects/{model}_debug.par'
         if idate:
             ifile = os.path.join(os.getenv('TMPDIR'), f"{model}.{idate.strftime('%Y%m%d%H-%M%S')}.par")
 
     logging.info(
-        f"Read {model} predictors. Use parquet file {ifile}, if it exists. If it doesn't exist, create it.")
+        f"load {model} predictors from parquet file {ifile}")
     if os.path.exists(ifile):
         logging.info(f'reading {ifile} {os.path.getsize(ifile)/1024**3:.1f}G')
         df = pd.read_parquet(ifile, engine="pyarrow")
         return df
     
+    logging.info(f"{ifile} doesn't exist, so create it.")
     # Define ifiles, a list of input files from glob.glob method
     if model == "HRRR":
         # HRRRX = experimental HRRR (v4)
@@ -188,8 +214,8 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects"):
     elif model.startswith("NSC"):
         search_str = f'{idir}/grid_data_new/grid_data_{model}_d01_20*00-0000.par'
         if debug:
-            search_str = search_str.replace(
-                "grid_data_new", "grid_data")  # old dataset for debugging
+            search_str = search_str.replace("*", "1606*")  # June 2016
+        logging.info(f"ifiles search string {search_str}")
         ifiles = glob.glob(search_str)
 
     if idate:
@@ -225,15 +251,11 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects"):
     df = df.set_index(["y", "x", "initialization_time", "forecast_hour"])
 
     if model.startswith("NSC3km"):
-        # Read mode probabilities
+        logging.info("model starts with 'NSC3km' so read mode probabilities")
         use_hourly_files = False
         if use_hourly_files:
             search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation_zero_filled/20*/label_probabilities_20*00_fh_*.nc'
             ifiles = sorted(glob.glob(search_str))
-            logging.info(
-                f"Found {len(ifiles)} storm mode probability files")
-            ifiles = modedate(
-                ifiles, df.index.get_level_values("initialization_time"))
             logging.info(
                 f"Read {len(ifiles)} storm mode files in date range of {model} DataFrame")
             # reset_coords to avoid xarray.core.merge.MergeError: unable to determine if these variables should be coordinates or not in the merged result: {'valid_time'}
@@ -243,11 +265,10 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects"):
         else:
             # Try nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
             search_str = f'/glade/scratch/ahijevyc/NCAR700_objects/output_object_based/evaluation_zero_filled/20??????0000.nc'
+            if debug:
+                search_str = search_str.replace('20????', '201606')
+            logging.info(f"search_str {search_str}")
             ifiles = sorted(glob.glob(search_str))
-            logging.info(
-                f"Ignore mode prob files for times that are not present in features DataFrame")
-            ifiles = modedate(
-                ifiles, df.index.get_level_values("initialization_time"))
             logging.info(
                 f"Open and combine {len(ifiles)} storm mode probability files")
             # Tried open_mfdataset, but got missing values for all but the first initialization time.
@@ -275,7 +296,7 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects"):
             ys = G211.ys
 
         modeds = modeds.assign_coords(dict(x=modeds.x, y=modeds.y))
-        logging.info(f"Use CONUS mask and drop points outside CONUS")
+        logging.info(f"Apply CONUS mask and drop points outside CONUS")
         # even with drop=True you still have nans. mask is not a box. It has irregular disjointed edges.
         modeds = modeds.where(mask, drop=True)
 
@@ -317,7 +338,7 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects"):
 
     # Merge weatherbug lightning data
     logging.info("load wbug lightning data")
-    wbug, nominal_rptdist = xarray.open_dataset("/glade/campaign/mmm/parc/ahijevyc/wbug_lightning/flash.G211.nc"), "40km"
+    wbug, nominal_rptdist = xarray.open_dataset(os.path.join(wbugdir, "flash.G211.nc")), "20km"
     wbug = wbug.sel(time=slice(earliest_valid_time,latest_valid_time))
     # In wbug, x : west to east, y : south to north
     # In sobash df, xind : south to north, yind : west to east.
@@ -325,43 +346,49 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects"):
     wbug = wbug.rename(dict(time="valid_time",x="y", y="x", 
         cg_hourly=f"cg_{nominal_rptdist}_hourly", 
         ic_hourly=f"ic_{nominal_rptdist}_hourly"))
+    if wbug.valid_time.size == 0:
+        logging.warning(f"wbug Dataset has 0 times")
     #     df     | wbug
     #================== 
     # valid_time | time
     #     y      |  x
     #     x      |  y
-    logging.info("merge wbug lightning data")
-    df = df.merge(wbug.to_dataframe(), on=["valid_time", "y", "x"])
+    logging.info(f"merge {len(wbug)} wbug lightning data")
+    # how="left" allows empty wbug columns
+    df = df.merge(wbug.to_dataframe(), how="left", on=["valid_time", "y", "x"])
     logging.info("done merging wbug lightning data")
-    # Sanity check--make sure prediction model and GLM grid box lat lons are similar
-    assert np.isclose(df.lon_y, df.lon_x, atol=0.1).all(), f"{model} and wbug longitudes don't match"
-    assert np.isclose(df.lat_y, df.lat_x, atol=0.1).all(), f"{model} and wbug lats don't match"
-    df = df.drop(columns=["lon_y", "lat_y"])
-    df = df.rename(columns=dict(lon_x="lon", lat_x="lat"), copy=False)
+    if wbug.valid_time.size:
+        # Sanity check--make sure prediction model and GLM grid box lat lons are similar
+        assert np.isclose(df.lon_y, df.lon_x, atol=0.1).all(), f"{model} and wbug longitudes don't match"
+        assert np.isclose(df.lat_y, df.lat_x, atol=0.1).all(), f"{model} and wbug lats don't match"
+        df = df.rename(columns=dict(lon_x="lon", lat_x="lat"), copy=False)
+        df = df.drop(columns=["lon_y", "lat_y"])
+    print(df)
 
     # Merge Geostationary Lightning Mapper data
-    if args.glm:
-        assert latest_valid_time > pd.to_datetime(
-            "20160101"), "DataFrame completely before GLM exists"
-        time_space_windows = [(1, 40), (2, 40)]
-        glmds = get_glm(time_space_windows)  # twin, rptdist)
-        # Trim GLM to time window of model data
-        glmds = glmds.sel(valid_time=slice(
-            earliest_valid_time, latest_valid_time))
+    firstglm = pd.to_datetime("20160101")
+    if latest_valid_time > firstglm:
+        time_space_windows = [(0, rptdist), (1, rptdist), (2, rptdist)]
+        glmds = get_glm(time_space_windows, start=earliest_valid_time, end=latest_valid_time)
         # In glmds, x : west to east, y : south to north
         # In sobash df, xind : south to north, yind : west to east.
         # dimensions are renamed to match sobash df.
         glmds = glmds.rename(dict(x="y", y="x"))
         logging.info(f"merge flashes with {model} DataFrame")
-        df = df.merge(glmds.to_dataframe(), on=["valid_time", "y", "x"])
+        # how="left" allows empty glmds columns
+        df = df.merge(glmds.to_dataframe(), how="left", on=["valid_time", "y", "x"])
         # Do {model} and GLM overlap at all?"
-        assert not df.empty, f"merged {model}/GLM Dataset is empty."
-        # Sanity check--make sure prediction model and GLM grid box lat lons are similar
-        assert np.isclose(df.lon_y, df.lon_x, atol=0.1).all(), f"{model} and glm longitudes don't match"
-        assert np.isclose(df.lat_y, df.lat_x, atol=0.1).all(), f"{model} and glm lats don't match"
+        if df.empty:
+            logging.warning(f"merged {model}/GLM Dataframe is empty.")
+        if wbug.valid_time.size:
+            # Sanity check--make sure prediction model and GLM grid box lat lons are similar
+            assert np.isclose(df.lon_y, df.lon_x, atol=0.1).all(), f"{model} and glm longitudes don't match"
+            assert np.isclose(df.lat_y, df.lat_x, atol=0.1).all(), f"{model} and glm lats don't match"
         df = df.drop(columns=["lon_y", "lat_y"])
-        # helpful for scale factor pickle file.
+        # helpful for scale factor pickle file (if you ever use it again).
         df = df.rename(columns=dict(lon_x="lon", lat_x="lat"), copy=False)
+    else:
+        logging.warning(f"all {model} data before first GLM {firstglm}")
 
     logging.info("convert 64-bit to 32-bit columns")
     dtype_dict = {
@@ -380,78 +407,88 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects"):
 
 def rptdist2bool(df, args):
     """
-    Convert distance to closest storm report to True/False based on distance and time thresholds 
-    And convert flash count to True/False based on distance, time, and flash threshold. 
+    Return DataFrame with storm report distances and flash counts converted to Boolean.
+    These columns have new names that include distance and time window. 
+    Also return a list of column names to be used as labels. 
     """
    
     event = args.event 
     rptdist = args.rptdist
     twin = args.twin
-    logging.debug(f"report distance {rptdist}km  time window {twin}h")
+    logging.debug(f"report distance {rptdist}km {twin}h")
+
     lsrtypes =  ["sighail", "sigwind", "hailone", "wind", "torn"]
-    rptcols = [ f"{r}_rptdist_{twin}hr" for r in lsrtypes ]
-    renamecolumns = {r : r.replace("rptdist", f"{rptdist}km") for r in rptcols}
-    logging.debug(f'replace "rptdist" with "{rptdist}km" in column names {renamecolumns}')
+    label_cols = [ f"{r}_rptdist_{t}hr" for r in lsrtypes for t in twin]
+    renamecolumns = {r : r.replace("rptdist", f"{rptdist}km") for r in label_cols}
+    logging.info(f'rename columns {renamecolumns}')
     df = df.rename(columns=renamecolumns, copy=False, errors="raise")
-    # Replace old rptcols list with list of new names
-    rptcols = list(renamecolumns.values())
+    # Replace old label_cols list with list of new names
+    label_cols = list(renamecolumns.values())
     logging.info(f"Convert severe report distance to boolean [0,{rptdist}km) = True")
-    df[rptcols] = (0 <= df[rptcols]) & (df[rptcols] < rptdist) # tested with df[rptcols].loc[:,rptcols] = . it is slower.
+    df[label_cols] = (0 <= df[label_cols]) & (df[label_cols] < rptdist) # faster than df[label_cols].loc[:,label_cols]
 
-    logging.debug("derive any report")
-    any_rpt_col = f"any_{rptdist}km_{twin}hr"
-    df[any_rpt_col] = df[rptcols].any(axis="columns")
-    rptcols.append(any_rpt_col)
+    for t in twin:
+        # any type of severe storm report
+        any_label_str = f"any_{rptdist}km_{t}hr"
+        labels_this_twin = [ f"{r}_{rptdist}km_{t}hr" for r in lsrtypes ] # refer to new label names (with f"{rptdist}km" not f"rptdist")
+        logging.debug(f"derive {any_label_str} from {labels_this_twin}")
+        df[any_label_str] = df[labels_this_twin].any(axis="columns")
+        label_cols.append(any_label_str)
 
-    # weatherbug CG and IC lightning
-    weatherbug =  [f"cg_{rptdist}km_hourly", f"ic_{rptdist}km_hourly"]
-    use_weatherbug = event is None or event == "cg" or event == "ic"
-    if use_weatherbug:
-        # Sum hourly counts within time window
-        # For twin=1, add hourly flash counts from -1h to 0h.
-        # For twin=2, add -2h, -1h, 0h, and +1h
-        # center=True and closed="right" are needed because hourly count covers time [ t, t+1h )
-        logging.info(f"sum {weatherbug} in {twin}h time window")
-        # remove duplicates and sort by index (including time)
-        sorted_in_time = df.loc[~df.index.duplicated(keep='first'),weatherbug].sort_index()
-        # For each location, calculate rolling sum (in time window)
-        ltg_sum = sorted_in_time.groupby(["y","x"]).rolling(twin*2, center=True, closed="right").sum().droplevel([0,1]) 
-        logging.info(f"assign sum to {weatherbug} columns in order of original DataFrame df")
-        df[weatherbug] = ltg_sum.loc[df.index]
-        logging.info(f"threshold {weatherbug} at {args.flash} flashes")
-        df[weatherbug] = df[weatherbug] >= args.flash
-        # Change "hourly" part of weatherbug column name to timewindow string f"{twin}hr"
-        renamecolumns = {l : l.rstrip("hourly") + f"{twin}hr" for l in weatherbug}
-        df = df.rename(columns=renamecolumns, copy=False)
-        newname = renamecolumns.values()
-        rptcols.extend(newname)
-        either = f"cg.ic_{rptdist}km_{twin}hr"
-        logging.info(f"{' or '.join(newname)} = {either}")
-        df[either] = df[newname].any(axis="columns")
-        rptcols.append(either)
+        # weatherbug CG and IC lightning
+        weatherbug =  [f"cg_{rptdist}km_hourly", f"ic_{rptdist}km_hourly"]
+        use_weatherbug = event is None or event == "cg" or event == "ic"
+        if use_weatherbug:
+            # Sum hourly counts within time window
+            # Investigate or debug with ~ahijevyc/wbug_time_window.ipynb
+            logging.info(f"Aggregate {weatherbug} during '{t}hr' time window")
+            # remove duplicates and sort by index (including time)
+            sorted_in_time = df.loc[~df.index.duplicated(keep='first'),weatherbug].sort_index()
+            # For each location, calculate rolling sum (in time window)
+            if t == 0:
+                logging.warning(f"using previous hour's flash count for '{t}hr' time window")
+                ltg_sum = sorted_in_time.groupby(["y","x"]).rolling(1, closed="left").sum().droplevel([0,1]) 
+            else:
+                # For twin=1, add hourly flash counts from -1h to 0h.
+                # For twin=2, add hourly flash counts from -2h, -1h, 0h, and +1h
+                ltg_sum = sorted_in_time.groupby(["y","x"]).rolling(t*2, center=True).sum().droplevel([0,1]) 
+            logging.info(f"assign sum to {weatherbug} columns in order of original DataFrame df")
+            df[weatherbug] = ltg_sum.loc[df.index]
+            logging.info(f"threshold at {args.flash} flashes")
+            df[weatherbug] = df[weatherbug] >= args.flash
+            # Change "hourly" part of weatherbug column name to timewindow string f"{t}hr"
+            renamecolumns = {l : l.rstrip("hourly") + f"{t}hr" for l in weatherbug}
+            df = df.rename(columns=renamecolumns, copy=False)
+            newname = renamecolumns.values()
+            label_cols.extend(newname)
+            either = f"cg.ic_{rptdist}km_{t}hr"
+            logging.info(f"{' or '.join(newname)} = {either}")
+            df[either] = df[newname].any(axis="columns")
+            label_cols.append(either)
 
-    # GLM?
-    if args.glm:
-        # Check if flash threshold is met in one space/time window.
-        # new flash variable name has space and time window in it.
-        flash_spacetime_win = f"flashes_{rptdist}km_{twin}hr"
-        logging.debug(f"at least {args.flash} flashes in {flash_spacetime_win}")
-        df[flash_spacetime_win] = df[flash_spacetime_win] >= args.flash
-        rptcols.append(flash_spacetime_win)
+        # GLM?
+        if args.glm:
+            # Check if flash threshold is met in one space/time window.
+            # new flash variable name has space and time window in it.
+            flash_spacetime_win = f"flashes_{rptdist}km_{t}hr"
+            logging.debug(f"at least {args.flash} flashes in {flash_spacetime_win}")
+            df[flash_spacetime_win] = df[flash_spacetime_win] >= args.flash
+            label_cols.append(flash_spacetime_win)
 
     if event is not None:
-        # Only want single event type starting with event substring.
-        rptcols = [f"{event}_{rptdist}km_{twin}hr"]
+        # Recreate a smaller label_cols list with a single event type.
+        label_cols = [ f"{event}_{rptdist}km_{t}hr" for t in twin ]
 
-    return df, rptcols
+    return df, label_cols
 
-def get_glm(time_space_windows, date=None):
+def get_glm(time_space_windows, date=None, start=None, end=None):
     # Initialize Dataset to hold GLM flash count for all space/time windows.
     ds = xarray.Dataset()
     for twin, rptdist in time_space_windows:
+        logging.info(f"get_glm: time/space window {twin}/{rptdist}")
         suffix = ".glm.nc"
         if rptdist == 20:
-            suffix = ".glm.40km.nc"
+            suffix = ".glm.20km.nc"
         if date:
             logging.info(f"date={date}")
             glmfiles = sorted(glob.glob(f"/glade/work/ahijevyc/GLM/{date.strftime('%Y%m%d')}*{suffix}"))
@@ -463,7 +500,7 @@ def get_glm(time_space_windows, date=None):
                 if os.path.exists(ifile):
                     glm = xarray.open_dataset(ifile)
                 else:
-                    logging.error(f"{ifile} does not exist. run ncrcat on GLM files")
+                    logging.error(f"{ifile} does not exist. To create, concatenate GLM files:")
                     logging.error(f"cd /glade/work/ahijevyc/GLM")
                     logging.error(f"ls 20??/*{suffix} > filelist")
                     logging.error(f"cat filelist|ncrcat --fl_lst_in {ifile}")
@@ -475,22 +512,28 @@ def get_glm(time_space_windows, date=None):
 
         assert (glm.time_coverage_start[1] - glm.time_coverage_start[0]) == np.timedelta64(3600,'s'), 'glm.time_coverage_start interval not 1h'
 
-        if rptdist < 40:
-            logging.error("TODO: remake GLM with {rptdist}km grid")
-            sys.exit(1)
+        time_coverage_start = slice(start, end)
+        logging.info(f"Trim GLM to time_coverage_start window {time_coverage_start}")
+        glm = glm.sel(time_coverage_start=time_coverage_start)
+
         newcol = f"flashes_{rptdist}km_{twin}hr"
-        logging.info(f"Sum flashes from -{twin} hours to +{twin-1} hour(s) to make {2*twin}-hour time-centered window. Store in new DataArray {newcol}")
         glmsum = xarray.zeros_like(glm)
-        for time_shift in range(-twin, twin):
-            glmsum += glm.shift(time_coverage_start=-time_shift)
+        if twin == 0:
+            logging.warning(f"Use hourly flashes from 1 hr ago for '0hr' time window. Strictly speaking, it's a 1-hr time window centered 30-min ago.")
+            glmsum = glm.shift(time_coverage_start = 1) # positive shifts to right
+        else:
+            logging.info(f"Sum hourly flashes from -{twin} hours to +{twin-1} hour(s) to make {2*twin}-hour valid_time-centered window.")
+            for time_shift in range(-twin, twin):
+                glmsum += glm.shift(time_coverage_start = -time_shift)
 
         if rptdist > 40:
             k = int(rptdist/40)
             logging.warning(f"{rptdist}km glm distance threshold is not really available. Spatial window overlaps masked points")
-            logging.warning(f"TODO: save GLM in non-masked form, or filter it from 40km to 120km while unmasked and making the GLM files.")
-            logging.info(f"Despite reservations, continuing to sum GLM flash counts in rolling {k}x{k} window")
+            logging.warning(f"TODO: save GLM in non-masked form, or sum with {rptdist}km rolling window while unmasked and making the GLM files.")
+            logging.info(f"Despite warning, continuing to sum GLM flash counts in rolling {k}x{k} window")
             glmsum = glmsum.rolling(x=k, y=k, center=True).sum()
 
+        logging.info(f"Store in new DataArray {newcol}")
         glmsum = glmsum.rename(dict(time_coverage_start="valid_time",flashes=newcol))
         ds = ds.assign(variables=glmsum)
     return ds
@@ -551,42 +594,20 @@ def upscale(field, nngridpts, type='mean', maxsize=27):
     return field_interp
 
 def get_features(args, subset=None):
-    if args.model == "HRRR":
-        features = [ "CAPESHEAR", "CAPESHEAR-N3T1", "CAPESHEAR-N3T3", "CAPESHEAR-N3T5", "CAPESHEAR-N5T1", "CAPESHEAR-N5T3", "CAPESHEAR-N5T5", "CREF", "CREF-N3T1", "CREF-N3T3", "CREF-N3T5",
-                    "CREF-N5T1", "CREF-N5T3", "CREF-N5T5", "GRPL_MAX", "GRPL_MAX-N3T1", "GRPL_MAX-N3T3", "GRPL_MAX-N3T5", "GRPL_MAX-N5T1", "GRPL_MAX-N5T3", "GRPL_MAX-N5T5", "HAIL_SFC",
-                    "HAIL_SFC-N3T1", "HAIL_SFC-N3T3", "HAIL_SFC-N3T5", "HAIL_SFC-N5T1", "HAIL_SFC-N5T3", "HAIL_SFC-N5T5", "HGT0C", "HGT0C-N3T1", "HGT0C-N3T3", "HGT0C-N3T5", "HGT0C-N5T1",
-                    "HGT0C-N5T3", "HGT0C-N5T5", "LR75", "LTG1", "LTG1-N3T1", "LTG1-N3T3", "LTG1-N3T5", "LTG1-N5T1", "LTG1-N5T3", "LTG1-N5T5", "LTG2", "LTG2-N3T1", "LTG2-N3T3", "LTG2-N3T5",
-                    "LTG2-N5T1", "LTG2-N5T3", "LTG2-N5T5", "LTG3", "LTG3-N3T1", "LTG3-N3T3", "LTG3-N3T5", "LTG3-N5T1", "LTG3-N5T3", "LTG3-N5T5", "Local_Solar_Hour_cos", "Local_Solar_Hour_sin",
-                    "MLCAPE", "MLCINH", "MLCINH-N3T1", "MLCINH-N3T3", "MLCINH-N3T5", "MLCINH-N5T1", "MLCINH-N5T3", "MLCINH-N5T5", "MUCAPE", "MUCAPE-N3T1", "MUCAPE-N3T3", "MUCAPE-N3T5", "MUCAPE-N5T1",
-                    "MUCAPE-N5T3", "MUCAPE-N5T5", "PREC_ACC_NC", "PREC_ACC_NC-N3T1", "PREC_ACC_NC-N3T3", "PREC_ACC_NC-N3T5", "PREC_ACC_NC-N5T1", "PREC_ACC_NC-N5T3", "PREC_ACC_NC-N5T5", "PSFC",
-                    "PSFC-N3T1", "PSFC-N3T3", "PSFC-N3T5", "PSFC-N5T1", "PSFC-N5T3", "PSFC-N5T5", "RVORT1", "RVORT1-N3T1", "RVORT1-N3T3", "RVORT1-N3T5", "RVORT1-N5T1", "RVORT1-N5T3", "RVORT1-N5T5",
-                    "SBCAPE", "SBCAPE-N3T1", "SBCAPE-N3T3", "SBCAPE-N3T5", "SBCAPE-N5T1", "SBCAPE-N5T3", "SBCAPE-N5T5", "SBCINH", "SBCINH-N3T1", "SBCINH-N3T3", "SBCINH-N3T5", "SBCINH-N5T1",
-                    "SBCINH-N5T3", "SBCINH-N5T5", "SBLCL", "SBLCL-N3T1", "SBLCL-N3T3", "SBLCL-N3T5", "SBLCL-N5T1", "SBLCL-N5T3", "SBLCL-N5T5", "SHR01", "SHR01-N3T1", "SHR01-N3T3", "SHR01-N3T5",
-                    "SHR01-N5T1", "SHR01-N5T3", "SHR01-N5T5", "SHR06", "SHR06-N3T1", "SHR06-N3T3", "SHR06-N3T5", "SHR06-N5T1", "SHR06-N5T3", "SHR06-N5T5", "SRH01", "SRH01-N3T1", "SRH01-N3T3",
-                    "SRH01-N3T5", "SRH01-N5T1", "SRH01-N5T3", "SRH01-N5T5", "SRH03", "SRH03-N3T1", "SRH03-N3T3", "SRH03-N3T5", "SRH03-N5T1", "SRH03-N5T3", "SRH03-N5T5", "STP", "STP-N3T1",
-                    "STP-N3T3", "STP-N3T5", "STP-N5T1", "STP-N5T3", "STP-N5T5", "T2", "T2-N3T1", "T2-N3T3", "T2-N3T5", "T2-N5T1", "T2-N5T3", "T2-N5T5", "T500", "T700", "T850", "T925",
-                    "TD2", "TD2-N3T1", "TD2-N3T3", "TD2-N3T5", "TD2-N5T1", "TD2-N5T3", "TD2-N5T5", "TD500", "TD700", "TD850", "TD925", "U500", "U700", "U850", "U925", "UP_HELI_MAX",
-                    "UP_HELI_MAX-N1T5", "UP_HELI_MAX-N3T1", "UP_HELI_MAX-N3T3", "UP_HELI_MAX-N3T5", "UP_HELI_MAX-N5T1", "UP_HELI_MAX-N5T3", "UP_HELI_MAX-N5T5", "UP_HELI_MAX02", "UP_HELI_MAX02-N3T1",
-                    "UP_HELI_MAX02-N3T3", "UP_HELI_MAX02-N3T5", "UP_HELI_MAX02-N5T1", "UP_HELI_MAX02-N5T3", "UP_HELI_MAX02-N5T5", "UP_HELI_MAX03", "UP_HELI_MAX03-N3T1", "UP_HELI_MAX03-N3T3",
-                    "UP_HELI_MAX03-N3T5", "UP_HELI_MAX03-N5T1", "UP_HELI_MAX03-N5T3", "UP_HELI_MAX03-N5T5", "UP_HELI_MAX120", "UP_HELI_MAX120-N1T5", "UP_HELI_MAX80", "UP_HELI_MAX80-N1T5",
-                    "UP_HELI_MIN", "UP_HELI_MIN-N3T1", "UP_HELI_MIN-N3T3", "UP_HELI_MIN-N3T5", "UP_HELI_MIN-N5T1", "UP_HELI_MIN-N5T3", "UP_HELI_MIN-N5T5", "V500", "V700", "V850", "V925",
-                    "WSPD10MAX", "WSPD10MAX-N3T1", "WSPD10MAX-N3T3", "WSPD10MAX-N3T5", "WSPD10MAX-N5T1", "WSPD10MAX-N5T3", "WSPD10MAX-N5T5", "W_DN_MAX", "W_DN_MAX-N3T1", "W_DN_MAX-N3T3",
-                    "W_DN_MAX-N3T5", "W_DN_MAX-N5T1", "W_DN_MAX-N5T3", "W_DN_MAX-N5T5", "W_UP_MAX", "W_UP_MAX-N3T1", "W_UP_MAX-N3T3", "W_UP_MAX-N3T5", "W_UP_MAX-N5T1", "W_UP_MAX-N5T3",
-                    "W_UP_MAX-N5T5", "dayofyear_cos", "dayofyear_sin", "forecast_hour", "lat", "lon"]
+    feature_list_file = f"suite_predictors/{args.model}.{args.suite}.txt"
 
-    elif args.model.startswith("NSC"):
-        # Had static list before Nov 24, 2022. But these 33 predictors were missing from the default suite. They weren't even my first commit to github.
-        # Why did they disappear? Maybe when I accidentally deleted my work directory in Oct 2021.
-        # {'LR75-N5T5', 'REFL_COM-N5T3', 'LR75-N5T1', 'HAILCAST_DIAM_MAX-N5T1', 'HAILCAST_DIAM_MAX-N3T3', 'UP_HELI_MIN-N5T3', 'UP_HELI_MIN-N5T5',
-        # 'HAILCAST_DIAM_MAX-N3T1', 'UP_HELI_MIN', 'REFL_COM-N5T1', 'REFL_COM-N5T5', 'MLCINH-N3T1', 'REFL_COM-N3T1', 'REFL_COM-N3T3', 'HAILCAST_DIAM_MAX', 'REFL_COM', 'HAILCAST_DIAM_MAX-N5T3', 
-        # 'REFL_COM-N3T5', 'UP_HELI_MIN-N5T1', 'MLCINH-N5T5', 'MLCINH-N3T5', 'UP_HELI_MIN-N3T5', 'MLCINH-N5T3', 'LR75-N3T1', 'HAILCAST_DIAM_MAX-N5T5', 
-        # 'HAILCAST_DIAM_MAX-N3T5', 'UP_HELI_MIN-N3T3', 'MLCINH-N5T1', 'LR75-N5T3', 'LR75-N3T3', 'UP_HELI_MIN-N3T1', 'LR75-N3T5', 'MLCINH-N3T3'}
+    # Defined list of features in this function before Nov 24, 2022. But these 33 predictors were missing from the default suite. They weren't even in my first commit to github.
+    # Why did they disappear? Maybe when I accidentally deleted my work directory in Oct 2021.
+    # {'LR75-N5T5', 'REFL_COM-N5T3', 'LR75-N5T1', 'HAILCAST_DIAM_MAX-N5T1', 'HAILCAST_DIAM_MAX-N3T3', 'UP_HELI_MIN-N5T3', 'UP_HELI_MIN-N5T5',
+    # 'HAILCAST_DIAM_MAX-N3T1', 'UP_HELI_MIN', 'REFL_COM-N5T1', 'REFL_COM-N5T5', 'MLCINH-N3T1', 'REFL_COM-N3T1', 'REFL_COM-N3T3', 'HAILCAST_DIAM_MAX', 'REFL_COM', 'HAILCAST_DIAM_MAX-N5T3', 
+    # 'REFL_COM-N3T5', 'UP_HELI_MIN-N5T1', 'MLCINH-N5T5', 'MLCINH-N3T5', 'UP_HELI_MIN-N3T5', 'MLCINH-N5T3', 'LR75-N3T1', 'HAILCAST_DIAM_MAX-N5T5', 
+    # 'HAILCAST_DIAM_MAX-N3T5', 'UP_HELI_MIN-N3T3', 'MLCINH-N5T1', 'LR75-N5T3', 'LR75-N3T3', 'UP_HELI_MIN-N3T1', 'LR75-N3T5', 'MLCINH-N3T3'}
 
-        features = open(f"suite_predictors/{args.model}.{args.suite}.txt","r").read().splitlines() # Hopefully these somewhat alphabetically-sorted lists are easier to spot mistakes in.
-       
-    else:
-        logging.error("Can't get feature suite for unexpected model {model}")
-        
+    features = open(feature_list_file, "r").read().splitlines() # Hopefully these somewhat alphabetically-sorted lists are easier to spot mistakes in.
+   
+    # strip leading and trailing whitespace
+    features = [x.strip() for x in features]
+
     if len(set(features)) != len(features):
         logging.warning(f"repeated feature(s) {set([x for x in features if features.count(x) > 1])}")
         features = list(set(features))
@@ -595,7 +616,8 @@ def get_features(args, subset=None):
 
 
 def make_fhr_str(fhr):
-    # abbreviate list of forecast hours with hyphens (where possible) so model name is not too long for tf.
+    # abbreviate list of forecast hours with hyphenated ranges of continuous times
+    # so model name is not too long for tf.
     fhr.sort()
     seq = []
     final = []
@@ -728,9 +750,6 @@ def get_savedmodel_path(args, odir="nn"):
     if args.savedmodel is not None:
         return args.savedmodel
 
-    # optimizer could be 'adam' or SGD from Sobash 2020
-    optimizer = get_optimizer(args.optimizer)
-   
     fhr_str = make_fhr_str(args.fhr)
 
     if args.batchnorm:
@@ -738,11 +757,13 @@ def get_savedmodel_path(args, odir="nn"):
     else:
         batchnorm_str = ""
 
+    twin_str = f"_{'.'.join(args.twin)}hr"
+
     glmstr = "" # GLM description 
     if args.glm: glmstr = f"{args.flash:02d}flash." # zero-padded flash count threshold
         
     neurons_str = ''.join([f"{x}n" for x in args.neurons]) # [1024] -> "1024n", [16,16] -> "16n16n"
-    savedmodel  = f"{odir}/{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km_{args.twin}hr.{neurons_str}.ep{args.epochs}.{fhr_str}."
-    savedmodel += f"bs{args.batchsize}.{optimizer.name}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
+    savedmodel  = f"{odir}/{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km{twin_str}.{neurons_str}.ep{args.epochs}.{fhr_str}."
+    savedmodel += f"bs{args.batchsize}.{args.optimizer}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
         
     return savedmodel
