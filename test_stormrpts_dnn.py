@@ -169,11 +169,24 @@ def statjob(fhr, statcurves=None):
 
         for thisfit in range(nfit):
             savedmodel_thisfitfold = f"{savedmodel}_{thisfit}/{kfold}fold{ifold}"
-            logging.debug(f"checking {savedmodel_thisfitfold} column order")
-            # yaml.Loader is not safe (yaml.FullLoader is) but legacy Loader handles argparse.namespace object.
-            yl = yaml.load(open(
-                os.path.join(savedmodel_thisfitfold, "config.yaml"), "r"),
-                Loader=yaml.Loader)
+            configfile = os.path.join(savedmodel_thisfitfold, "config.yaml")
+            logging.info(f"checking config file {configfile}")
+            try:
+                # ultimately, yaml should be safe to load. TODO: save and read argparse.Namespace and pd.Timestamps using plain strings.
+                yl = yaml.load(open(configfile, "r"), Loader=yaml.SafeLoader)
+            except:
+                try:
+                    logging.warning("yaml.Loader is not safe (yaml.SafeLoader is) but legacy Loader handles argparse.namespace object.")
+                    yl = yaml.load(open(configfile, "r"), Loader=yaml.Loader)
+                except TypeError:
+                    logging.error("perhaps you are in conda environment tf, but try tf2")
+                    logging.error("pandas unpickles timestamps differently. one expects 3; one expects 4 arguments")
+                    sys.exit(1)
+                except:
+                    yl = yaml.load(open(configfile, "r"), Loader=yaml.BaseLoader)
+                    logging.error("TODO: deal with pickle pandas.Timestamp error")
+                    yl["args"] = argparse.Namespace(yl["args"])
+                    yl["trainstart"] = pd.Timestamp[yl["trainstart"][0]]
             yl_labels = yl["labels"]
             # delete labels so we can make DataFrame from rest of dictionary.
             del (yl["labels"])
@@ -286,7 +299,7 @@ if debug:
 fhrs = df["forecast_hour"].unique()
 fhrs = list(fhrs)
 fhrs.insert(0, "all")  # put "all" first because it takes the longest
-if nprocs:
+if nprocs > 1:
     # Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
     # execcasper --ncpus=13 --mem=50GB # gpus not neeeded for verification
     pool = multiprocessing.Pool(processes=nprocs)
