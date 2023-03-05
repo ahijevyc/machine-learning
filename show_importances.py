@@ -5,6 +5,7 @@ import visualizecv
 import hwtmode
 import hwtmode.data
 import matplotlib.pyplot as plt
+from ml_functions import load_df
 import numpy as np
 import os
 import pandas as pd
@@ -260,49 +261,4 @@ def main():
             plt.close()
 
 if __name__ == "__main__":
-    if False:
-        static_file = os.path.join('/glade/scratch/ahijevyc/temp/t.par')
-        if os.path.exists(static_file):
-            df = pd.read_parquet(static_file)
-        else:
-            ifiles = glob.glob(f'/glade/work/sobash/NSC_objects/HRRR/grid_data/grid_data_HRRR_d01_2020052400-0000.par')
-            df = pd.concat(pd.read_parquet(ifile) for ifile in ifiles)
-            df["time"] = pd.to_datetime(df["Date"]) + df["fhr"] * datetime.timedelta(hours=1)
-            idate = df.Date.astype('datetime64[ns]')
-            df = df.drop(columns="Date")
-            
-            df["Local_Solar_Hour"] = df["time"].dt.hour + df["lon"]/15
-            df = df.rename(columns=dict(xind="projection_y_coordinate",yind="projection_x_coordinate"))
-            df = df.set_index(["time","projection_y_coordinate","projection_x_coordinate"])
-            glm = xarray.open_dataset("/glade/scratch/ahijevyc/temp/GLM_all.nc")
-            assert (glm.time_coverage_start[1] - glm.time_coverage_start[0]) == np.timedelta64(3600,'s'), 'glm.time_coverage_start interval not 1h'
-            # Add flashes from previous 2 times and next time to current time. 4-hour centered time window 
-            glm = glm + glm.shift(time_coverage_start=2) + glm.shift(time_coverage_start=1) + glm.shift(time_coverage_start=-1)
-            print("Merge flashes with df")
-            df = df.merge(glm.to_dataframe(), left_on=["time","projection_y_coordinate","projection_x_coordinate"], right_index=True)
-
-            # speed things up without multiindex
-            df = df.reset_index(drop=True)
-            # Local solar time, sin and cos components
-            df = hwtmode.data.decompose_circular_feature(df, "Local_Solar_Hour", period=24)
-
-            rptdist = 40
-            # Convert severe report distance to boolean (0-rptdist = True)
-            for r in ["sighail", "sigwind", "hailone", "wind", "torn"]:
-                for h in ["0","1","2"]:
-                    rh = f"{r}_rptdist_{h}hr"
-                    df[rh] = (df[rh] >= 0) & (df[rh] < rptdist)
-            df.to_parquet(static_file, compression=None)
-        print(static_file)
-        y = df["wind_rptdist_2hr"] 
-        X = df.drop(columns=[x for x in df.columns if x.endswith("hr")])
-        # normalize data 
-        mean = X.mean()
-        std  = X.std()
-        X = (X - mean) / std
-        print('done normalizing')
-
-        model = models[0]
-        pi = permutation_importance(model.fit(X, y), X, y, scoring=scoring, n_repeats=1)
-        dist_linkage = corr_dendro_plot(X, dist_threshold=[1.5], importances=pi.importances_mean, figh=figh)
     main()
