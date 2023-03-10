@@ -1,4 +1,5 @@
 import argparse
+import dask.dataframe as dd
 import datetime
 import glob
 import logging
@@ -138,7 +139,7 @@ def get_argparser():
     parser.add_argument('--testend', type=lambda s: pd.to_datetime(s), default="20220101T00", help="testing set end")
     parser.add_argument('--teststart', type=lambda s: pd.to_datetime(s), default="20201202T12", help="testing set start")
     parser.add_argument('--suite', type=str, default='default', help="name for suite of training features")
-    parser.add_argument('--twin', nargs="+", type=int, default=[0,1,2], help="time window(s) in hours")
+    parser.add_argument('--twin', nargs="+", type=int, default=[1,2,4], help="time window(s) in hours")
 
     return parser
 
@@ -149,7 +150,7 @@ def full_cmd(args):
     String is suitable for shell command line.
     Format datetimes as strings.
     Just print keyword if its value is Boolean and True.
-    Skip keyword and value if its value is Boolean and False.
+    Skip keyword and value if its type is Boolean and value is False.
     Skip keyword and value if value is None.
     Remove brackets from lists.
     """
@@ -258,7 +259,6 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
     logging.info(f"read {len(df)} rows")
 
     # Index df and modeds the same way.
-    logging.info(f"convert df Date to datetime64[ns]")
     df = df.rename(columns=dict(yind="y", xind="x",
                    Date="initialization_time", fhr="forecast_hour"), copy=False)
     logging.info(
@@ -269,16 +269,18 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
 
     if model.startswith("NSC3km"):
         logging.info("model starts with 'NSC3km' so read mode probabilities")
-        use_hourly_files = False
-        if use_hourly_files:
+        use_hourly_mode_files = False
+        if use_hourly_mode_files:
             search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation_zero_filled/20*/label_probabilities_20*00_fh_*.nc'
             ifiles = sorted(glob.glob(search_str))
             logging.info(
                 f"Read {len(ifiles)} storm mode files in date range of {model} DataFrame")
-            # reset_coords to avoid xarray.core.merge.MergeError: unable to determine if these variables should be coordinates or not in the merged result: {'valid_time'}
+            # reset_coords to avoid xarray.core.merge.MergeError: unable to determine if 
+            # these variables should be coordinates or not in the merged result: {'valid_time'}
             # set_index to avoid ValueError: Could not find any dimension coordinates to use to order the datasets for concatenation
-            modeds = xarray.open_mfdataset(ifiles, preprocess=lambda x: x.reset_coords(["lon", "lat", 'valid_time']).set_index(time=['init_time', 'forecast_hour']),
-                                           combine="nested", parallel=True, compat="override", combine_attrs="override")  # parallel is faster
+            modeds = xarray.open_mfdataset(ifiles, 
+                    preprocess=lambda x: x.reset_coords(["lon", "lat", 'valid_time']).set_index(time=['init_time', 'forecast_hour']),
+                    combine="nested", parallel=True, compat="override", combine_attrs="override")  # parallel is faster
         else:
             # Try nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
             search_str = f'/glade/scratch/ahijevyc/NCAR700_objects/output_object_based/evaluation_zero_filled/20*00.nc'
@@ -334,6 +336,7 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
     df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15
     df = decompose_circular_feature(df, "dayofyear", period=365.25)
     df = decompose_circular_feature(df, "Local_Solar_Hour", period=24)
+    logging.info(f"make valid_time an index so wbug and glm can be joined on valid_time")
     df = df.reset_index().set_index(["valid_time", "y", "x"])
 
     earliest_valid_time = df.index.get_level_values(
@@ -378,7 +381,7 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
         assertclose(df, "lat", "lon", rsuffix="_y")
     df = df.drop(columns=["lon_y", "lat_y", "cg", "ic"])
 
-    # Merge Geostationary Lightning Mapper (GLM)
+    # join Geostationary Lightning Mapper (GLM)
     firstglm = pd.to_datetime("20160101")
     if latest_valid_time > firstglm:
         time_space_windows = [(1, rptdist), (2, rptdist), (4, rptdist)]
@@ -388,7 +391,7 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
         # In sobash df, xind : south to north, yind : west to east.
         # dimensions are renamed to match sobash df.
         glmds = glmds.rename(dict(x="y", y="x"))
-        logging.info(f"join flashes with {model} DataFrame")
+        logging.info(f"join glm flashes with {model} DataFrame")
         df = df.join(glmds.to_dataframe(), rsuffix="_y")
         # Do {model} and GLM overlap at all?"
         if df.empty:
@@ -487,7 +490,7 @@ def get_glm(time_space_windows, date=None, start=None, end=None):
         suffix = f".glm_{rptdist}km_{twin}hr.nc"
         if date:
             logging.info(f"date={date}")
-            glmfiles = sorted(glob.glob(f"/glade/work/ahijevyc/GLM/{date.strftime('%Y')}/{date.strftime('%Y%m%d_%H%M')}{suffix}"))
+            glmfiles = sorted(glob.glob(f"/glade/campaign/mmm/parc/ahijevyc/GLM/{date.strftime('%Y')}/{date.strftime('%Y%m%d_%H%M')}{suffix}"))
             glm = xarray.open_mfdataset(glmfiles, concat_dim="time", combine="nested")
         else:
             oneGLMfile = True
@@ -497,12 +500,12 @@ def get_glm(time_space_windows, date=None, start=None, end=None):
                     glm = xarray.open_dataset(ifile)
                 else:
                     logging.error(f"{ifile} does not exist. To create, concatenate GLM files:")
-                    logging.error(f"cd /glade/work/ahijevyc/GLM")
+                    logging.error(f"cd /glade/campaign/mmm/parc/ahijevyc/GLM")
                     logging.error(f"find ???? -name '*{suffix}' > filelist")
                     logging.error(f"cat filelist|ncrcat --fl_lst_in {ifile}")
                     sys.exit(1)
             else:
-                glmfiles = sorted(glob.glob(f"/glade/work/ahijevyc/GLM/{date.strftime('%Y')}/*{suffix}"))
+                glmfiles = sorted(glob.glob(f"/glade/campaign/mmm/parc/ahijevyc/GLM/{date.strftime('%Y')}/*{suffix}"))
                 logging.info("open_mfdataset")
                 glm = xarray.open_mfdataset(glmfiles, concat_dim="time", combine="nested")
 
