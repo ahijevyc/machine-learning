@@ -181,8 +181,7 @@ def main():
     explabel = f"neurons={neurons} {labelpick} label\nbatch size={batch_size} scoring={scoring}"
     explabel += f"\npermutation importance\n(mean drop in {scoring} from permuting feature)\nrepeated {n_repeats} times * {n_splits} cv splits"
 
-    if not models:
-        sys.exit(0)
+    assert models, "no models"
 
     # HACK for just 1st model. get importances so we can choose the predictor with highest importance in each cluster 
     model = models[0]
@@ -201,14 +200,14 @@ def main():
             print(f"cross validation split {i}/{n_splits}")
         feature_df = pd.DataFrame(pis, index=features)
         feature_df.to_csv(ofile)
-    print(ofile)
+    logging.info(f"made {ofile}")
     ax = feature_df.T.boxplot(figsize=(18, 5),rot=90)
     ax.set_ylabel(explabel)
     ax.set_title(type(model).__name__)
     plt.tight_layout()
-    ofile = os.path.realpath(f"{suite}_{neurons}neurons_{labelpick}label_{class_startswith}_bs{batch_size}_imp_barplot.png")
+    ofile = os.path.join(os.getenv("TMPDIR"),f"{suite}_{neurons}neurons_{labelpick}label_{class_startswith}_bs{batch_size}_imp_barplot.png")
     plt.savefig(ofile)
-    print(ofile)
+    logging.info(f"created {ofile}")
     plt.close()
 
     feature_df["importance"] = feature_df.mean(axis="columns")
