@@ -45,26 +45,6 @@ def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], 
     return model
 
 
-# maybe delete this function. It returns a list of model_dates that have a corresponding mode file.
-def modedate(modeprob_files, model_dates):
-    logging.warning("I didn't think this was needed")
-    sys.exit(1)
-    model_dates = pd.to_datetime(np.unique(model_dates))
-    pattern = r'/20\d\d[01][0-9][0123][0-9][012][0-9][0-5][0-9]'
-    filtered_ifiles = []
-    started_with = len(modeprob_files)
-    for ifile in modeprob_files:
-        yyyymmddhhmm = re.search(pattern, ifile).group().lstrip("/")
-        itime = pd.to_datetime(yyyymmddhhmm, format='%Y%m%d%H%M')
-        if itime in model_dates:
-            filtered_ifiles.append(ifile)
-        else:
-            logging.debug(
-                f"ignoring modeprob file {itime}. no matching model file")
-    logging.info(f"Kept {len(filtered_ifiles)}/{started_with} mode prob files")
-    return filtered_ifiles
-
-
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 
@@ -85,7 +65,6 @@ def main():
     fhr = args.fhr
     fits = args.fits
     folds = args.folds
-    glm = args.glm
     kfold = args.kfold
     learning_rate = args.learning_rate
     neurons = args.neurons
@@ -111,8 +90,8 @@ def main():
 
     # Error if requested training and test period overlap and kfold == 1.
     overlap = min([trainend, testend]) - max([trainstart, teststart])
-    assert overlap < datetime.timedelta(
-        hours=0) or kfold > 1, f"training and testing periods overlap {trainstart}-{trainend}|{teststart}-{testend}"
+    assert overlap <= datetime.timedelta(
+        hours=0) or kfold > 1, f"training and testing periods overlap [{trainstart},{trainend}) [{teststart},{testend}]"
 
     ### saved model name ###
     savedmodel = get_savedmodel_path(args)
@@ -129,12 +108,13 @@ def main():
 
     plotclimo = False
     if plotclimo:
-        mdf = df.groupby(["lon", "lat"]).sum()  # for debug plot
-        fig, axes = plt.subplots(nrows=3, ncols=2)
+        mdf = df.groupby(["lon", "lat"], numeric_only=True).sum()  # for debug plot
+        ncols=3
+        fig, axes = plt.subplots(nrows=int(np.ceil(len(label_cols)/ncols)), ncols=ncols)
         for label, ax in zip(label_cols, axes.flatten()):
             im = ax.scatter(mdf.index.get_level_values("lon"), mdf.index.get_level_values(
                 "lat"), c=mdf[label])  # Don't use mdf (sum) for lon/lat
-            ax.set_title(label)
+            ax.set_title(f"{label} sum")
             fig.colorbar(im, ax=ax)
         plt.show()
 
@@ -144,10 +124,9 @@ def main():
 
     # HRRRv3 to v4 at 20201202 0z.
     logging.info(
-        f"Use initialization times {trainstart} through {trainend} for training")
+        f"Use initialization times in range [{trainstart}, {trainend}) for training")
     before_filtering = len(df)
-    train_idx = (trainstart <= df.initialization_time) & (
-        df.initialization_time <= trainend)
+    train_idx = (trainstart <= df.initialization_time) & (df.initialization_time < trainend)
     df = df[train_idx]
     setattr(args, 'trainstart', df.initialization_time.min())
     setattr(args, 'trainend', df.initialization_time.max())
@@ -196,9 +175,9 @@ def main():
         logging.error(f"{sv.columns[stdiszero]} standard dev equals zero")
     logging.info(f"normalize data")
     df = (df - sv.loc["mean"]) / sv.loc["std"]
-    logging.info('done normalizing')
 
-    if df.describe().isna().any().any():
+    logging.info('checking for nans in DataFrame')
+    if df.isna().any().any():
         logging.error(f"nan(s) in {df.columns[df.mean().isna()]}")
 
     if kfold > 1:
@@ -208,7 +187,7 @@ def main():
         plot_splits = False
         if plot_splits:
             fig, ax = plt.subplots()
-            y = labels["any_rptdist_2hr"]
+            y = labels["any_40km_2hr"]
             n_splits = kfold
             visualizecv.plot_cv_indices(cv, df, y, None, ax, n_splits)
             plt.show()
@@ -232,9 +211,10 @@ def main():
             else:
                 logging.info(f"fitting {model_i}")
                 model = baseline_model(input_dim=df.columns.size, numclasses=labels.columns.size, neurons=neurons, name=f"fit_{i}",
-                                       kernel_regularizer=L2(l2=reg_penalty), optimizer_name=optimizer_name, dropout=dropout, learning_rate=learning_rate)
-                model.fit(df.iloc[train_split].to_numpy(dtype='float32'), labels.iloc[train_split].to_numpy(dtype='float32'), class_weight=None,
-                                    sample_weight=None, batch_size=batchsize, epochs=epochs, verbose=2)
+                                       kernel_regularizer=L2(l2=reg_penalty), optimizer_name=optimizer_name, dropout=dropout, 
+                                       learning_rate=learning_rate)
+                model.fit(df.iloc[train_split].to_numpy(dtype='float32'), labels.iloc[train_split].to_numpy(dtype='float32'), 
+                        class_weight=None, sample_weight=None, batch_size=batchsize, epochs=epochs, verbose=2)
                 logging.debug(f"saving {model_i}")
                 model.save(model_i)
                 del model
