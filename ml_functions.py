@@ -28,15 +28,25 @@ def assertclose(df, *c, lsuffix="", rsuffix="", atol=0.1):
     # Don't compare valid_times if eligible forecast hours were different like storm mode (12-35)
     for column in c:
         lc, rc = column+lsuffix, column+rsuffix
+        if df[lc].isnull().all():
+            logging.warning(f"{lc} is all null. skip assertclose check")
+            continue
+        if df[rc].isnull().all():
+            logging.warning(f"{rc} is all null. skip assertclose check")
+            continue
         xymean = df[[lc,rc]].groupby(["y", "x"]).mean(numeric_only=False)
         # Handle times and numbers differently
         if xymean[lc].dtype == '<M8[ns]' and xymean[rc].dtype == '<M8[ns]':
-            assert xymean[column+lsuffix].equals(xymean[rc]), (
+            logging.debug(f"are {lc} and {rc} time columns close?")
+            assert xymean[lc].equals(xymean[rc]), (
                 f"{lc} and {rc} are not equal {xymean[[lc,rc]]}")
         else:
-            logging.debug(f"are {lc} and {rc} close?")
-            assert np.allclose(xymean[lc], xymean[rc], atol=atol), (
-                f"{lc} and {rc} are not close {xymean[[lc,rc]]}")
+            logging.debug(f"are {lc} and {rc} numeric columns close?")
+            if not np.allclose(xymean[lc], xymean[rc], atol=atol):
+                logging.error(f"{lc} and {rc} are not close {xymean[[lc,rc]]}")
+                logging.error((xymean[lc] - xymean[rc]).max())
+                pdb.set_trace()
+                sys.exit(1)
 
 # write and read safe yaml. write argparse.Namespace as dictionary and 
 # timestamps as strings
@@ -85,8 +95,8 @@ def configs_match(ylargs, args):
     teststart = args.teststart
     testend   = args.testend
     overlap = min([trainend, testend]) - max([trainstart, teststart])
-    if overlap >= datetime.timedelta(hours=0) and args.kfold == 1:
-        logging.warning(f"training and testing time ranges overlap [{trainstart},{trainend}] [{teststart},{testend}]")
+    if overlap > datetime.timedelta(hours=0) and args.kfold == 1:
+        logging.warning(f"training and testing time ranges overlap [{trainstart},{trainend}) [{teststart},{testend}]")
    
     # Comparing yaml config training period and requested training period (args) is not a good test 
     # because yaml config bounds are trimmed to actual range of training cases.
@@ -95,7 +105,7 @@ def configs_match(ylargs, args):
     # args.trainstart <= trainstart            trainend <= args.trainend
     assert args.trainstart <= trainstart, (f"requested start of training period {args.trainstart} is after actual training period [{trainstart},{trainend}]")
     assert trainend <= args.trainend,     (f"requested end of training period {args.trainend} is before actual training period [{trainstart},{trainend}]")
-    for key in ["batchnorm", "batchsize", "dropout", "epochs", "flash", "fhr", "glm", "kfold", "learning_rate", "model", "neurons",
+    for key in ["batchnorm", "batchsize", "dropout", "epochs", "flash", "fhr", "kfold", "learning_rate", "model", "neurons",
                 "optimizer", "reg_penalty", "rptdist", "suite", "twin"]:
         assert getattr(ylargs, key) == getattr(
             args, key), f'requested {key} {getattr(args,key)} does not match savedmodel yaml {key} {getattr(ylargs,key)}'
@@ -120,7 +130,6 @@ def get_argparser():
     parser.add_argument('--fits', nargs="+", type=int, default=None, help="work on specific fit(s) so you can run many in parallel")
     parser.add_argument('--flash', type=int, default=10, help="GLM flash count threshold")
     parser.add_argument('--folds', nargs="+", type=int, default=None, help="work on specific fold(s) so you can run many in parallel")
-    parser.add_argument("--glm", action='store_true', help='Use GLM')
     parser.add_argument('--kfold', type=int, default=5, help="apply kfold cross validation to training set")
     parser.add_argument('--idate', type=lambda s: pd.to_datetime(s), help="single initialization time")
     parser.add_argument('--ifile', type=str, help="Read this parquet input file. Otherwise guess which one to read.")
@@ -135,7 +144,7 @@ def get_argparser():
     parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
     parser.add_argument('--seed', type=int, default=None, help="random number seed for reproducability")
     parser.add_argument('--trainend', type=lambda s: pd.to_datetime(s), help="training set end")
-    parser.add_argument('--trainstart', type=lambda s: pd.to_datetime(s), help="training set start")
+    parser.add_argument('--trainstart', type=lambda s: pd.to_datetime(s), default="19700101", help="training set start")
     parser.add_argument('--testend', type=lambda s: pd.to_datetime(s), default="20220101T00", help="testing set end")
     parser.add_argument('--teststart', type=lambda s: pd.to_datetime(s), default="20201202T12", help="testing set start")
     parser.add_argument('--suite', type=str, default='default', help="name for suite of training features")
@@ -233,7 +242,7 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
     elif model.startswith("NSC"):
         search_str = f'{idir}/grid_data_new/grid_data_{model}_d01_20*00-0000.par'
         if debug:
-            debug_replace = "201[0]*"
+            debug_replace = "20180*"
             search_str = search_str.replace("20*", debug_replace)
         logging.info(f"ifiles search string {search_str}")
         ifiles = glob.glob(search_str)
@@ -258,78 +267,55 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
 
     logging.info(f"read {len(df)} rows")
 
-    # Index df and modeds the same way.
-    df = df.rename(columns=dict(yind="y", xind="x",
+    # In sobash df, xind : south to north, yind : west to east.
+    df = df.rename(columns=dict(xind="y", yind="x",
                    Date="initialization_time", fhr="forecast_hour"), copy=False)
+    logging.info(f"convert initialization_time to datetime")
+    df["initialization_time"] = pd.to_datetime(df["initialization_time"]) # Forgot to add this before Mar 12, 2023
     logging.info(
         f"derive valid_time from initialization_time + forecast_hour")
-    df["valid_time"] = pd.to_datetime(
-        df["initialization_time"]) + pd.to_timedelta(df["forecast_hour"], unit="hours")
+    df["valid_time"] = df["initialization_time"] + pd.to_timedelta(df["forecast_hour"], unit="hours")
     df = df.set_index(["y", "x", "initialization_time", "forecast_hour"])
 
     if model.startswith("NSC3km"):
         logging.info("model starts with 'NSC3km' so read mode probabilities")
-        use_hourly_mode_files = False
-        if use_hourly_mode_files:
-            search_str = f'/glade/scratch/cbecker/NCAR700_objects/output_object_based/evaluation_zero_filled/20*/label_probabilities_20*00_fh_*.nc'
-            ifiles = sorted(glob.glob(search_str))
-            logging.info(
-                f"Read {len(ifiles)} storm mode files in date range of {model} DataFrame")
-            # reset_coords to avoid xarray.core.merge.MergeError: unable to determine if 
-            # these variables should be coordinates or not in the merged result: {'valid_time'}
-            # set_index to avoid ValueError: Could not find any dimension coordinates to use to order the datasets for concatenation
-            modeds = xarray.open_mfdataset(ifiles, 
-                    preprocess=lambda x: x.reset_coords(["lon", "lat", 'valid_time']).set_index(time=['init_time', 'forecast_hour']),
-                    combine="nested", parallel=True, compat="override", combine_attrs="override")  # parallel is faster
-        else:
-            # Try nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
-            search_str = f'/glade/scratch/ahijevyc/NCAR700_objects/output_object_based/evaluation_zero_filled/20*00.nc'
-            if debug:
-                search_str = search_str.replace('20*', debug_replace)
-            logging.info(f"search_str {search_str}")
-            ifiles = sorted(glob.glob(search_str))
-            logging.info(
-                f"Open and combine {len(ifiles)} storm mode probability files")
-            modeds = xarray.open_mfdataset(ifiles)
+        # Try nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
+        search_str = f'/glade/scratch/ahijevyc/NCAR700_objects/output_object_based/evaluation_zero_filled/20*00.nc'
+        if debug:
+            search_str = search_str.replace('20*', debug_replace)
+        logging.info(f"search_str {search_str}")
+        ifiles = sorted(glob.glob(search_str))
+        logging.info(
+            f"open {len(ifiles)} daily storm mode probability files")
+        modeds = xarray.open_mfdataset(ifiles)
         logging.info(
             f"put usamask pickle file into xarray DataArray")
-        # mask = pickle.load(open('/glade/u/home/sobash/2013RT/usamask.pk', 'rb'))
         mask = pickle.load(open('./usamask.pk', 'rb'))
         height, width = 65, 93
-        mask = mask.reshape((height, width))
-        mask = xarray.DataArray(mask, dims=["y", "x"])
-        logging.info(f"Make x and y indices actual coordinates of mask")
-        mask = mask.assign_coords(dict(x=mask.x, y=mask.y))
+        mask = xarray.DataArray(mask.reshape((height,width)), 
+                coords=dict(y=range(height), x=range(width)), dims=["y","x"])
 
         modeds = modeds.assign_coords(dict(x=modeds.x, y=modeds.y))
-        logging.info(f"apply mask and trim coordinates")
-        # even after trimming coordinates with drop=True you still have nans. mask is not a box. It has irregular disjointed edges.
+        logging.info(f"apply mask and crop coordinates")
+        # even after cropping with drop=True you still have nans. mask is not a box. It has irregular disjointed edges.
         modeds = modeds.where(mask, drop=True)
-
-        # In modeds, x : west to east, y : south to north
-        # In sobash df, xind : south to north, yind : west to east.
-        logging.info(
-            f"Rename mode prob dimensions to match index names of df {df.index.names}")
-        modeds = modeds.rename(dict(x="y", y="x"))
-        logging.info(f"mode prob dimensions now {modeds.dims}")
 
         logging.info(f"convert mode DataArray to DataFrame")
         modedf = modeds.to_dataframe()
         logging.info(
-            f"Drop all-NA rows from {len(modedf)} row storm mode DataFrame")
+            f"drop all-NA rows from {len(modedf)} row storm mode DataFrame")
         modedf = modedf.dropna(how="all")
         # modeprobs are na for some forecast hours. So expect fewer rows than df
         logging.info(f"{len(modedf)} remaining")
         logging.info(f"replace 'time' with 'forecast_hour' in index")
-        modedf = modedf.set_index(
-            "forecast_hour", append=True).droplevel("time")
-        logging.info(
-            f"join {model} DataFrame with storm mode DataFrame")
-        df = df.join(modedf, rsuffix="_mode")
+        modedf = modedf.set_index("forecast_hour", append=True).droplevel("time")
+        logging.info(f"join {model} DataFrame with storm mode DataFrame")
+        rsuffix="_mode"
+        df = df.join(modedf, rsuffix=rsuffix)
         logging.info(
             f"joined DataFrame has {len(df)} rows")
-        assertclose(df, "lat", "lon", rsuffix="_mode")
-        df = df.drop(columns=["lat_mode", "lon_mode", "valid_time_mode"])
+        assertclose(df, "lat", "lon", rsuffix=rsuffix)
+        df = df.drop(columns=[f"{c}{rsuffix}" for c in ["lat","lon","valid_time"]])
 
     # Derived fields
     df["dayofyear"] = df["valid_time"].dt.dayofyear
@@ -347,61 +333,51 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
     # Merge weatherbug lightning data
     logging.info("load wbug lightning data")
     wbug = xarray.open_dataset(os.path.join(wbugdir, f"flash_{rptdist}km.nc"))
-    # In wbug, x : west to east, y : south to north
-    # In sobash df, xind : south to north, yind : west to east.
-    # dimensions are renamed to match sobash df.
-    #     df     | wbug
-    # ==================
-    # valid_time | time_coverage_start
-    #     y      |  x
-    #     x      |  y
-    wbug = wbug.rename(dict(x="y",y="x",time_coverage_start="valid_time"))
+    wbug = wbug.rename(dict(time_coverage_start="valid_time"))
     wbug = wbug.sel(valid_time=slice(earliest_valid_time, latest_valid_time))
-    
-    for t in twin:
+    if wbug.valid_time.size == 0:
+        logging.warning(f"no wbug times to join")
+    else:
+        for t in twin:
+            if wbug.valid_time.size:
+                # weatherbug CG and IC lightning
+                # Sum counts in 30-minute blocks
+                # Investigate or debug with ~ahijevyc/wbug_sum_time_window.ipynb
+                logging.info(f"sum weatherbug flashes in {t}hr time window")
+                ltg_sum = wbug.rolling(valid_time=t*2, center=True).sum()
+            else:
+                ltg_sum = xarray.full_like(wbug, np.nan)
+                logging.warning(f"wbug Dataset has 0 valid_times")            
+            name_dict = {l: f"{l}_{rptdist}km_{t}hr" for l in ["cg","ic"]}
+            logging.info(f"rename {name_dict}")
+            ltg_sum = ltg_sum.rename(name_dict)
+            wbug = wbug.assign(ltg_sum)
+            
+        logging.info(f"join {wbug.valid_time.size} wbug lightning times")
+        rsuffix='wbug'
+        df = df.join(wbug.to_dataframe(), rsuffix=rsuffix)
+        logging.info("joined wbug lightning data")
         if wbug.valid_time.size:
-            # weatherbug CG and IC lightning
-            # Sum counts in 30-minute blocks
-            # Investigate or debug with ~ahijevyc/wbug_sum_time_window.ipynb
-            logging.info(f"Sum weatherbug flashes in +/-{t}hr time window")
-            ltg_sum = wbug.rolling(valid_time=t*2, center=True).sum()
-        else:
-            ltg_sum = xarray.full_like(wbug, np.nan)
-            logging.warning(f"wbug Dataset has 0 valid_times")            
-        name_dict = {l: f"{l}_{rptdist}km_{t}hr" for l in ["cg","ic"]}
-        logging.info(f"rename {name_dict}")
-        ltg_sum = ltg_sum.rename(name_dict)
-        wbug = wbug.assign(ltg_sum)
-        
-    logging.info(f"join {wbug.valid_time.size} wbug lightning times")
-    df = df.join(wbug.to_dataframe(), rsuffix="_y")
-    logging.info("done joining wbug lightning data")
-    if wbug.valid_time.size:
-        # Sanity check--make sure lat lons are similar
-        assertclose(df, "lat", "lon", rsuffix="_y")
-    df = df.drop(columns=["lon_y", "lat_y", "cg", "ic"])
+            logging.debug(
+                f"Sanity check--make sure {model} and {rsuffix} lat lons are close")
+            assertclose(df, "lat", "lon", rsuffix=rsuffix)
+        df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}", "cg", "ic"])
 
     # join Geostationary Lightning Mapper (GLM)
-    firstglm = pd.to_datetime("20160101")
-    if latest_valid_time > firstglm:
-        time_space_windows = [(1, rptdist), (2, rptdist), (4, rptdist)]
-        glmds = get_glm(time_space_windows,
-                        start=earliest_valid_time, end=latest_valid_time)
-        # In glmds, x : west to east, y : south to north
-        # In sobash df, xind : south to north, yind : west to east.
-        # dimensions are renamed to match sobash df.
-        glmds = glmds.rename(dict(x="y", y="x"))
-        logging.info(f"join glm flashes with {model} DataFrame")
-        df = df.join(glmds.to_dataframe(), rsuffix="_y")
-        # Do {model} and GLM overlap at all?"
-        if df.empty:
-            logging.warning(f"joined {model}/GLM DataFrame is empty.")
-        logging.debug(
-            f"Sanity check--make sure {model} and GLM lat lons are close")
-        assertclose(df, "lat", "lon", rsuffix="_y")
-        df = df.drop(columns=["lon_y", "lat_y"])
+    time_space_windows = [(1, rptdist), (2, rptdist), (4, rptdist)]
+    glmds = get_glm(time_space_windows,
+                    start=earliest_valid_time, end=latest_valid_time)
+    if glmds.valid_time.size == 0:
+        logging.warning(f"no GLM times to join")
     else:
-        logging.warning(f"all {model} data before first GLM {firstglm}")
+        logging.info(f"join glm flashes with {model} DataFrame")
+        rsuffix="glm"
+        df = df.join(glmds.to_dataframe(), rsuffix=rsuffix)
+        # Do {model} and GLM overlap at all?"
+        logging.info(
+            f"Sanity check--make sure {model} and {rsuffix} lat lons are close")
+        assertclose(df, "lat", "lon", rsuffix=rsuffix)
+        df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}"])
 
     logging.info("convert 64-bit to 32-bit columns")
     dtype_dict = {
@@ -455,26 +431,29 @@ def rptdist2bool(df, args):
         label_cols.append(any_label_str)
 
     for t in twin:
-
         # weatherbug flashes
-        logging.info(f"threshold wbug at {args.flash} flashes")
         wbug_cols = [f"{f}_{rptdist}km_{t}hr" for f in ["cg","ic"]]
-        df[wbug_cols] = df[wbug_cols] >= args.flash
-        either = f"cg.ic_{rptdist}km_{t}hr"
-        logging.info(f"{' or '.join(wbug_cols)} = {either}")
-        df[either] = df[wbug_cols].any(axis="columns")
-        label_cols.extend(wbug_cols)
-        label_cols.append(either) # do not extend with single string either. it gets treated like an array of characters
+        if set(wbug_cols).issubset(df.columns):
+            logging.info(f"threshold wbug at {args.flash} flashes")
+            df[wbug_cols] = df[wbug_cols] >= args.flash
+            either = f"cg.ic_{rptdist}km_{t}hr"
+            logging.info(f"{' or '.join(wbug_cols)} = {either}")
+            df[either] = df[wbug_cols].any(axis="columns")
+            label_cols.extend(wbug_cols)
+            label_cols.append(either) # do not extend with single string either. it gets treated like an array of characters
+        else:
+            logging.warning(f"{wbug_cols} not in DataFrame")
         
-        # GLM?
+        # GLM flashes
         flash_spacetime_win = f"flashes_{rptdist}km_{t}hr"
         if flash_spacetime_win in df:
             # Check if flash threshold is met in one space/time window.
             # new flash variable name has space and time window in it.
-            logging.debug(
-                f"at least {args.flash} flashes in {flash_spacetime_win}")
+            logging.debug(f"threshold {flash_spacetime_win} >= {args.flash}")
             df[flash_spacetime_win] = df[flash_spacetime_win] >= args.flash
             label_cols.append(flash_spacetime_win)
+        else:
+            logging.warning(f"{flash_spacetime_win} not in DataFrame")
 
     if event is not None:
         # Recreate a smaller label_cols list with a single event type.
@@ -483,6 +462,10 @@ def rptdist2bool(df, args):
     return df, label_cols
 
 def get_glm(time_space_windows, date=None, start=None, end=None):
+    # join Geostationary Lightning Mapper (GLM)
+    firstglm = pd.to_datetime("20180213")
+    if end < firstglm:
+        logging.warning(f"requested GLM time range [{start}-{end}] prior to first GLM day {firstglm}")
     # Initialize Dataset to hold GLM flash count for all space/time windows.
     ds = xarray.Dataset()
     for twin, rptdist in time_space_windows:
@@ -497,6 +480,7 @@ def get_glm(time_space_windows, date=None, start=None, end=None):
             if oneGLMfile:
                 ifile = f"/glade/scratch/ahijevyc/temp/all{suffix}"
                 if os.path.exists(ifile):
+                    logging.info(f"open {ifile} for GLM flashes")
                     glm = xarray.open_dataset(ifile)
                 else:
                     logging.error(f"{ifile} does not exist. To create, concatenate GLM files:")
@@ -519,6 +503,8 @@ def get_glm(time_space_windows, date=None, start=None, end=None):
         logging.info(f"Store in new DataArray {newcol}")
         glm = glm.rename(dict(time="valid_time",flashes=newcol))
         ds = ds.assign(variables=glm)
+    if ds.valid_time.size == 0:
+        logging.warning(f"GLM Dataset is empty.")
     return ds
 
 
@@ -742,8 +728,7 @@ def get_savedmodel_path(args, odir="nn"):
 
     twin_str = f"_{'.'.join([str(int(t)) for t in args.twin])}hr"
 
-    glmstr = "" # GLM description 
-    if args.glm: glmstr = f"{args.flash:02d}flash." # zero-padded flash count threshold
+    glmstr = f"{args.flash:02d}flash." # zero-padded flash count threshold. GLM description 
         
     neurons_str = ''.join([f"{x}n" for x in args.neurons]) # [1024] -> "1024n", [16,16] -> "16n16n"
     savedmodel  = f"{odir}/{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km{twin_str}.{neurons_str}.ep{args.epochs}.{fhr_str}."
