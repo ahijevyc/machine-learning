@@ -189,18 +189,17 @@ def get_optimizer(s, learning_rate = 0.001, **kwargs):
     return o
 
 
-def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaign/mmm/parc/ahijevyc/wbug_lightning"):
+def get_ifile(args):
+    """
+    Return name of parquet file that is combination of all daily input
+    """
     debug = args.debug
     idate = args.idate
     ifile = args.ifile
     model = args.model
     rptdist = args.rptdist
-    twin = args.twin
-
-    # Define input filename.
     if ifile is None:
         if model == "HRRR":
-            ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.par'
             ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
             if debug:
                 ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
@@ -211,15 +210,19 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
         if idate:
             ifile = os.path.join(
                 os.getenv('TMPDIR'), f"{model}.{idate.strftime('%Y%m%d%H-%M%S')}.par")
+        # uncomment when you need to deal with 20km input grid in addition to 40km
+        #base, ext = os.path.splitext(ifile)
+        #ifile = f"{base}.{rptdist}km.par"
+    return ifile
 
-    logging.info(
-        f"load {model} predictors from parquet file {ifile}")
-    if os.path.exists(ifile):
-        logging.info(f'reading {ifile} {os.path.getsize(ifile)/1024**3:.1f}G')
-        df = pd.read_parquet(ifile, engine="pyarrow")
-        return df
 
-    logging.info(f"{ifile} doesn't exist, so create it.")
+def get_ifiles(args, idir):
+    """
+    Return list of daily input files
+    """
+    debug = args.debug
+    idate = args.idate
+    model = args.model
     # Define ifiles, a list of input files from glob.glob method
     if model == "HRRR":
         # HRRRX = experimental HRRR (v4)
@@ -260,26 +263,48 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
             sys.exit(1)
         ifiles = [d]
 
-    logging.info(f"Reading {len(ifiles)} {model} files")
+    return ifiles
+
+
+def load_df(args, idir="/glade/work/sobash/NSC_objects", 
+        wbugdir="/glade/campaign/mmm/parc/ahijevyc/wbug_lightning"):
+    """
+    Return DataFrame with all input data for a particular model
+    and grid size. Contains features and labels
+    """
+    debug = args.debug
+    idate = args.idate
+    model = args.model
+    rptdist = args.rptdist
+    twin = args.twin
+
+    ifile = get_ifile(args)
+    if os.path.exists(ifile):
+        logging.info(f'reading {ifile} {os.path.getsize(ifile)/1024**3:.1f}G')
+        df = pd.read_parquet(ifile, engine="pyarrow")
+        return df
+
+    ifiles = get_ifiles(args, idir)
+    logging.info(f"Create {ifile} from {len(ifiles)} {model} files.")
     # pd.read_parquet only handles one file at a time, so pd.concat
-    df = pd.concat(pd.read_parquet(f, engine="pyarrow")
-                   for f in ifiles)
+    df = pd.concat(pd.read_parquet(f, engine="pyarrow") for f in ifiles)
 
     logging.info(f"read {len(df)} rows")
 
     # In sobash df, xind : south to north, yind : west to east.
     df = df.rename(columns=dict(xind="y", yind="x",
                    Date="initialization_time", fhr="forecast_hour"), copy=False)
+
+
     logging.info(f"convert initialization_time to datetime")
     df["initialization_time"] = pd.to_datetime(df["initialization_time"]) # Forgot to add this before Mar 12, 2023
     logging.info(
         f"derive valid_time from initialization_time + forecast_hour")
     df["valid_time"] = df["initialization_time"] + pd.to_timedelta(df["forecast_hour"], unit="hours")
-    df = df.set_index(["y", "x", "initialization_time", "forecast_hour"])
 
     if model.startswith("NSC3km"):
         logging.info("model starts with 'NSC3km' so read mode probabilities")
-        # Try nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
+        # nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
         search_str = f'/glade/scratch/ahijevyc/NCAR700_objects/output_object_based/evaluation_zero_filled/20*00.nc'
         if debug:
             search_str = search_str.replace('20*', debug_replace)
@@ -309,9 +334,9 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
         logging.info(f"{len(modedf)} remaining")
         logging.info(f"replace 'time' with 'forecast_hour' in index")
         modedf = modedf.set_index("forecast_hour", append=True).droplevel("time")
-        logging.info(f"join {model} DataFrame with storm mode DataFrame")
+        logging.info(f"join {model} DataFrame with storm mode DataFrame on y,x,init,fhr")
         rsuffix="_mode"
-        df = df.join(modedf, rsuffix=rsuffix)
+        df = df.set_index(["y", "x", "initialization_time", "forecast_hour"]).join(modedf, rsuffix=rsuffix)
         logging.info(
             f"joined DataFrame has {len(df)} rows")
         assertclose(df, "lat", "lon", rsuffix=rsuffix)
@@ -322,62 +347,64 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects", wbugdir="/glade/campaig
     df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15
     df = decompose_circular_feature(df, "dayofyear", period=365.25)
     df = decompose_circular_feature(df, "Local_Solar_Hour", period=24)
-    logging.info(f"make valid_time an index so wbug and glm can be joined on valid_time")
+    logging.info(f"make valid_time an index on which additional labels can be joined")
     df = df.reset_index().set_index(["valid_time", "y", "x"])
 
-    earliest_valid_time = df.index.get_level_values(
-        level="valid_time").min()
-    latest_valid_time = df.index.get_level_values(
-        level="valid_time").max()
-
-    # Merge weatherbug lightning data
-    logging.info("load wbug lightning data")
-    wbug = xarray.open_dataset(os.path.join(wbugdir, f"flash_{rptdist}km.nc"))
-    wbug = wbug.rename(dict(time_coverage_start="valid_time"))
-    wbug = wbug.sel(valid_time=slice(earliest_valid_time, latest_valid_time))
-    if wbug.valid_time.size == 0:
-        logging.warning(f"no wbug times to join")
+    if rptdist != 40:
+        logging.warning(f"{model} input assumes rptdist=40km. requested {rptdist}km")
+        logging.warning("can't add lightning")
     else:
-        for t in twin:
-            if wbug.valid_time.size:
-                # weatherbug CG and IC lightning
-                # Sum counts in 30-minute blocks
-                # Investigate or debug with ~ahijevyc/wbug_sum_time_window.ipynb
+        earliest_valid_time = df.index.get_level_values(
+            level="valid_time").min()
+        latest_valid_time = df.index.get_level_values(
+            level="valid_time").max()
+
+        # Merge weatherbug CG and IC lightning
+        # counts in 30-minute blocks
+        logging.info("load wbug lightning data")
+        wbug = xarray.open_dataset(os.path.join(wbugdir, f"flash_{rptdist}km.nc"))
+        wbug = wbug.rename(dict(time_coverage_start="valid_time"))
+        logging.info(f"valid_time slice({earliest_valid_time},{latest_valid_time})")
+        wbug = wbug.sel(valid_time=slice(earliest_valid_time, latest_valid_time))
+        ltg_sums=xarray.Dataset()
+        if wbug.valid_time.size == 0:
+            logging.warning(f"no wbug times to join")
+        else:
+            for t in twin:
+                # sum counts in 30-minute blocks
+                # debug with ~ahijevyc/wbug_sum_time_window.ipynb
                 logging.info(f"sum weatherbug flashes in {t}hr time window")
                 ltg_sum = wbug.rolling(valid_time=t*2, center=True).sum()
-            else:
-                ltg_sum = xarray.full_like(wbug, np.nan)
-                logging.warning(f"wbug Dataset has 0 valid_times")            
-            name_dict = {l: f"{l}_{rptdist}km_{t}hr" for l in ["cg","ic"]}
-            logging.info(f"rename {name_dict}")
-            ltg_sum = ltg_sum.rename(name_dict)
-            wbug = wbug.assign(ltg_sum)
-            
-        logging.info(f"join {wbug.valid_time.size} wbug lightning times")
-        rsuffix='wbug'
-        df = df.join(wbug.to_dataframe(), rsuffix=rsuffix)
-        logging.info("joined wbug lightning data")
-        if wbug.valid_time.size:
+                # Append rptdist and twin strings to ["cg","ic"] variable names.
+                name_dict = {s: f"{s}_{rptdist}km_{t}hr" for s in ["cg","ic"]}
+                logging.info(f"rename {name_dict}")
+                ltg_sum = ltg_sum.rename(name_dict)
+                logging.info(ltg_sum.data.mean())
+                ltg_sums = ltg_sums.assign(ltg_sum)
+                
+            logging.info(f"join {wbug.valid_time.size} wbug lightning times")
+            rsuffix='wbug'
+            df = df.join(ltg_sums.to_dataframe(), rsuffix=rsuffix)
+            logging.info("joined wbug lightning data")
             logging.debug(
                 f"Sanity check--make sure {model} and {rsuffix} lat lons are close")
             assertclose(df, "lat", "lon", rsuffix=rsuffix)
-        df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}", "cg", "ic"])
+            df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}"])
 
-    # join Geostationary Lightning Mapper (GLM)
-    time_space_windows = [(1, rptdist), (2, rptdist), (4, rptdist)]
-    glmds = get_glm(time_space_windows,
-                    start=earliest_valid_time, end=latest_valid_time)
-    if glmds.valid_time.size == 0:
-        logging.warning(f"no GLM times to join")
-    else:
-        logging.info(f"join glm flashes with {model} DataFrame")
-        rsuffix="glm"
-        df = df.join(glmds.to_dataframe(), rsuffix=rsuffix)
-        # Do {model} and GLM overlap at all?"
-        logging.info(
-            f"Sanity check--make sure {model} and {rsuffix} lat lons are close")
-        assertclose(df, "lat", "lon", rsuffix=rsuffix)
-        df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}"])
+        # join Geostationary Lightning Mapper (GLM)
+        time_space_windows = [(1, rptdist), (2, rptdist), (4, rptdist)]
+        glmds = get_glm(time_space_windows,
+                        start=earliest_valid_time, end=latest_valid_time)
+        if glmds.valid_time.size == 0:
+            logging.warning(f"no GLM times to join")
+        else:
+            logging.info(f"join glm flashes with {model} DataFrame")
+            rsuffix="glm"
+            df = df.join(glmds.to_dataframe(), rsuffix=rsuffix)
+            logging.info(
+                f"Sanity check--make sure {model} and {rsuffix} lat lons are close")
+            assertclose(df, "lat", "lon", rsuffix=rsuffix)
+            df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}"])
 
     logging.info("convert 64-bit to 32-bit columns")
     dtype_dict = {
