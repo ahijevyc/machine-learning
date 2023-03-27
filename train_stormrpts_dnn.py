@@ -88,10 +88,14 @@ def main():
         np.random.seed(seed)
         tf.random.set_seed(seed)
 
-    # Error if requested training and test period overlap and kfold == 1.
     overlap = min([trainend, testend]) - max([trainstart, teststart])
-    assert overlap <= datetime.timedelta(
-        hours=0) or kfold > 1, f"training and testing periods overlap [{trainstart},{trainend}) [{teststart},{testend}]"
+    if overlap > datetime.timedelta(hours=0):
+        logging.warning(f"training and testing periods overlap [{trainstart},{trainend}) [{teststart},{testend}]")
+        if kfold > 1:
+            logging.warning(f"but overlap is okay. kfold={kfold} cross-validation separates train and test cases")
+        else:
+            # Exit if requested training and test period overlap and kfold == 1.
+            sys.exit(1)
 
     ### saved model name ###
     savedmodel = get_savedmodel_path(args)
