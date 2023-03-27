@@ -283,7 +283,9 @@ def statjob(fhr, statcurves=None):
                            fill=False, plabel=False)
             fig.suptitle(f"{suite} {rpt_type}")
             fig.text(0.5, 0.01, ' '.join(df.columns), wrap=True, fontsize=5)
-            ofile = f"{savedmodel}.{rpt_type}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.f{fhr}.png"
+            ofile = os.path.join(os.getenv("TMPDIR"),
+                    f"{os.path.basename(savedmodel)}.{rpt_type}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.f{fhr}.png")
+
             fig.savefig(ofile)
             logging.info(os.path.realpath(ofile))
             plt.clf()

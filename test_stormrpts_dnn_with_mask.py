@@ -313,7 +313,7 @@ if debug:
 fhrs = df[("forecast_hour", "feature")].unique()
 fhrs = list(fhrs)
 fhrs.insert(0, "all")  # put "all" first because it takes the longest
-if nprocs:
+if nprocs > 1:
     # Verify nprocs forecast hours in parallel. Execute script on machine with nprocs+1 cpus
     # execcasper --ncpus=13 --mem=50GB # gpus not neeeded for verification
     pool = multiprocessing.Pool(processes=nprocs)
