@@ -6,7 +6,6 @@ import numpy as np
 import os
 import pandas as pd
 import pdb
-import random
 import re
 import sys
 from sklearn.model_selection import KFold, GroupKFold, train_test_split
@@ -83,10 +82,8 @@ def main():
         logging.basicConfig(level=logging.DEBUG)
 
     if seed:
-        logging.info(f"random seed {seed}")
-        random.seed(seed)
-        np.random.seed(seed)
-        tf.random.set_seed(seed)
+        logging.info(f"set random seed {seed}")
+        tf.keras.utils.set_random_seed(seed)
 
     overlap = min([trainend, testend]) - max([trainstart, teststart])
     if overlap > datetime.timedelta(hours=0):
