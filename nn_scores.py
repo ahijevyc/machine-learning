@@ -96,6 +96,7 @@ def main():
     # remove common prefix from nn (make it shorter) 
     if len(ifiles) > 1: # otherwise nn is empty and doesn't trigger legend
         dfs["nn"] = dfs["nn"].str.replace(prefix,"",regex=False)
+        dfs["nn"] = dfs["nn"].str.lstrip("_") # labels with leading underscore not shown in legend
 
     # Loop thru types of event (torn, wind, hail, lightning)
     for cl, df in dfs.groupby("class"):

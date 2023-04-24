@@ -1,5 +1,4 @@
 import argparse
-import dask.dataframe as dd
 import datetime
 import glob
 import logging
@@ -44,7 +43,8 @@ def assertclose(df, *c, lsuffix="", rsuffix="", atol=0.1):
             logging.debug(f"are {lc} and {rc} numeric columns close?")
             if not np.allclose(xymean[lc], xymean[rc], atol=atol):
                 logging.error(f"{lc} and {rc} are not close {xymean[[lc,rc]]}")
-                logging.error((xymean[lc] - xymean[rc]).max())
+                logging.error((xymean[lc] - xymean[rc]).abs().max())
+                logging.error((xymean[lc] - xymean[rc]).abs().argmax())
                 pdb.set_trace()
                 sys.exit(1)
 
@@ -105,8 +105,8 @@ def configs_match(ylargs, args):
     # args.trainstart <= trainstart            trainend <= args.trainend
     assert args.trainstart <= trainstart, (f"requested start of training period {args.trainstart} is after actual training period [{trainstart},{trainend}]")
     assert trainend <= args.trainend,     (f"requested end of training period {args.trainend} is before actual training period [{trainstart},{trainend}]")
-    for key in ["batchnorm", "batchsize", "dropout", "epochs", "flash", "fhr", "kfold", "learning_rate", "model", "neurons",
-                "optimizer", "reg_penalty", "rptdist", "suite", "twin"]:
+    for key in ["batchnorm", "batchsize", "dropout", "epochs", "flash", "fhr", "kfold", "labels", "learning_rate", "model", "neurons",
+                "optimizer", "reg_penalty", "suite"]:
         assert getattr(ylargs, key) == getattr(
             args, key), f'requested {key} {getattr(args,key)} does not match savedmodel yaml {key} {getattr(ylargs,key)}'
 
@@ -122,7 +122,7 @@ def get_argparser():
     parser.add_argument("-d", "--debug", action='store_true')
     parser.add_argument("--dropout", type=float, default=0., help='fraction of neurons to drop in each hidden layer (0-1)')
     parser.add_argument('--epochs', default=30, type=int, help="number of training epochs")
-    parser.add_argument('--event', default=None, choices=["cg", "ic", "flash", "sighail", "sigwind", "hailone", "wind", "torn"], help="train for this event only")
+    parser.add_argument('--labels', nargs="+", help="labels")
     parser.add_argument('--fhr', nargs="+", type=int, default=list(range(1,49)), help="train with these forecast hours. Testing scripts only use this list to verify correct model "
                                                                                       "for testing; no filter applied to testing data. In other words you "
                                                                                       "test on all forecast hours in the testing data, regardless of whether the model was "
@@ -140,7 +140,6 @@ def get_argparser():
     parser.add_argument('--nprocs', type=int, default=0, help="verify this many forecast hours in parallel")
     parser.add_argument('--optimizer', type=str, choices=['Adam','SGD'], default='Adam', help="optimizer")
     parser.add_argument('--reg_penalty', type=float, default=0.01, help="L2 regularization factor")
-    parser.add_argument('--rptdist', type=int, default=40, help="severe weather report max distance")
     parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
     parser.add_argument('--seed', type=int, default=None, help="random number seed for reproducability")
     parser.add_argument('--trainend', type=lambda s: pd.to_datetime(s), help="training set end")
@@ -148,7 +147,6 @@ def get_argparser():
     parser.add_argument('--testend', type=lambda s: pd.to_datetime(s), default="20220101T00", help="testing set end")
     parser.add_argument('--teststart', type=lambda s: pd.to_datetime(s), default="20201202T12", help="testing set start")
     parser.add_argument('--suite', type=str, default='default', help="name for suite of training features")
-    parser.add_argument('--twin', nargs="+", type=int, default=[1,2,4], help="time window(s) in hours")
 
     return parser
 
@@ -197,7 +195,6 @@ def get_ifile(args):
     idate = args.idate
     ifile = args.ifile
     model = args.model
-    rptdist = args.rptdist
     if ifile is None:
         if model == "HRRR":
             ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
@@ -210,11 +207,9 @@ def get_ifile(args):
         if idate:
             ifile = os.path.join(
                 os.getenv('TMPDIR'), f"{model}.{idate.strftime('%Y%m%d%H-%M%S')}.par")
-        # uncomment when you need to deal with 20km input grid in addition to 40km
-        #base, ext = os.path.splitext(ifile)
-        #ifile = f"{base}.{rptdist}km.par"
     return ifile
 
+debug_replace = "202106*"
 
 def get_ifiles(args, idir):
     """
@@ -228,7 +223,7 @@ def get_ifiles(args, idir):
         # HRRRX = experimental HRRR (v4)
         search_str = f'{idir}/HRRR_new/grid_data/grid_data_HRRRX_d01_20*00-0000.par'
         if debug:
-            search_str = search_str.replace("*", "2006*")  # just June 2020
+            search_str = search_str.replace("HRRRX","HRRR").replace("20*", debug_replace) 
         else:
             # append HRRR to HRRRX.
             # HRRR prior to Dec 3 2020 is v3 and HRRR at Dec 3 2020 and afterwards is v4.
@@ -236,8 +231,8 @@ def get_ifiles(args, idir):
             search_str += f' {idir}/HRRR_new/grid_data/grid_data_HRRR_d01_2020120[3-9]*00-0000.par'
             # Dec 10-31, 2020 00z only
             search_str += f' {idir}/HRRR_new/grid_data/grid_data_HRRR_d01_202012[1-3]*00-0000.par'
-            # 2021+ 00z only
-            search_str += f' {idir}/HRRR_new/grid_data/grid_data_HRRR_d01_202[1-9]*00-0000.par'
+            # 2021 00z only
+            search_str += f' {idir}/HRRR_new/grid_data/grid_data_HRRR_d01_2021*00-0000.par' # used to include 2022+ but they have no storm reports
         logging.info(f"ifiles search string {search_str}")
         ifiles = []
         for x in search_str.split(" "):
@@ -245,7 +240,6 @@ def get_ifiles(args, idir):
     elif model.startswith("NSC"):
         search_str = f'{idir}/grid_data_new/grid_data_{model}_d01_20*00-0000.par'
         if debug:
-            debug_replace = "20180*"
             search_str = search_str.replace("20*", debug_replace)
         logging.info(f"ifiles search string {search_str}")
         ifiles = glob.glob(search_str)
@@ -265,7 +259,8 @@ def get_ifiles(args, idir):
 
     return ifiles
 
-
+# Used by load_df and rptdist2bool
+twin = [1,2,4]
 def load_df(args, idir="/glade/work/sobash/NSC_objects", 
         wbugdir="/glade/campaign/mmm/parc/ahijevyc/wbug_lightning"):
     """
@@ -275,8 +270,7 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
     debug = args.debug
     idate = args.idate
     model = args.model
-    rptdist = args.rptdist
-    twin = args.twin
+    rptdist = 40
 
     ifile = get_ifile(args)
     if os.path.exists(ifile):
@@ -302,10 +296,16 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
         f"derive valid_time from initialization_time + forecast_hour")
     df["valid_time"] = df["initialization_time"] + pd.to_timedelta(df["forecast_hour"], unit="hours")
 
-    if model.startswith("NSC3km"):
-        logging.info("model starts with 'NSC3km' so read mode probabilities")
+    if model.startswith("NSC3km") or model.startswith("HRRR"):
+        logging.info("read mode probabilities")
         # nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
-        search_str = f'/glade/scratch/ahijevyc/NCAR700_objects/output_object_based/evaluation_zero_filled/20*00.nc'
+        if model.startswith("NSC3km"):
+            search_str = f'/glade/scratch/ahijevyc/NCAR700_objects/output_object_based/evaluation_zero_filled/20*00.nc'
+        elif model.startswith("HRRR"):
+            search_str = f'/glade/scratch/ahijevyc/HRRR_HWT_2023_data/model_output/evaluation/20*00.nc'
+        else:
+            logging.error(f"no mode probs for {model}")
+            sys.exit(1)
         if debug:
             search_str = search_str.replace('20*', debug_replace)
         logging.info(f"search_str {search_str}")
@@ -315,7 +315,7 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
         modeds = xarray.open_mfdataset(ifiles)
         logging.info(
             f"put usamask pickle file into xarray DataArray")
-        mask = pickle.load(open('./usamask.pk', 'rb'))
+        mask = pickle.load(open('HRRR/usamask_mod.pk', 'rb'))
         height, width = 65, 93
         mask = xarray.DataArray(mask.reshape((height,width)), 
                 coords=dict(y=range(height), x=range(width)), dims=["y","x"])
@@ -350,61 +350,57 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
     logging.info(f"make valid_time an index on which additional labels can be joined")
     df = df.reset_index().set_index(["valid_time", "y", "x"])
 
-    if rptdist != 40:
-        logging.warning(f"{model} input assumes rptdist=40km. requested {rptdist}km")
-        logging.warning("can't add lightning")
+    earliest_valid_time = df.index.get_level_values(
+        level="valid_time").min()
+    latest_valid_time = df.index.get_level_values(
+        level="valid_time").max()
+
+    # Merge weatherbug CG and IC lightning
+    # Counts are in 30-minute bins
+    logging.info("load wbug lightning data")
+    wbug = xarray.open_dataset(os.path.join(wbugdir, f"flash_{rptdist}km.nc"))
+    wbug = wbug.rename(dict(time_coverage_start="valid_time"))
+    logging.info(f"valid_time slice({earliest_valid_time},{latest_valid_time})")
+    wbug = wbug.sel(valid_time=slice(earliest_valid_time, latest_valid_time))
+    ltg_sums=xarray.Dataset()
+    if wbug.valid_time.size == 0:
+        logging.warning(f"no wbug times to join")
     else:
-        earliest_valid_time = df.index.get_level_values(
-            level="valid_time").min()
-        latest_valid_time = df.index.get_level_values(
-            level="valid_time").max()
+        for t in twin:
+            # sum counts in 30-minute blocks
+            # debug with ~ahijevyc/wbug_sum_time_window.ipynb
+            logging.info(f"sum weatherbug flashes in {t}hr time window")
+            ltg_sum = wbug.rolling(valid_time=t*2, center=True).sum()
+            # Append rptdist and twin strings to ["cg","ic"] variable names.
+            name_dict = {s: f"{s}_{rptdist}km_{t}hr" for s in ["cg","ic"]}
+            logging.info(f"rename {name_dict}")
+            ltg_sum = ltg_sum.rename(name_dict)
+            logging.info(ltg_sum.mean())
+            ltg_sums = ltg_sums.assign(ltg_sum)
+            
+        logging.info(f"join {wbug.valid_time.size} wbug lightning times")
+        rsuffix='wbug'
+        df = df.join(ltg_sums.to_dataframe(), rsuffix=rsuffix)
+        logging.info("joined wbug lightning data")
+        logging.debug(
+            f"Sanity check--make sure {model} and {rsuffix} lat lons are close")
+        assertclose(df, "lat", "lon", rsuffix=rsuffix)
+        df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}"])
 
-        # Merge weatherbug CG and IC lightning
-        # counts in 30-minute blocks
-        logging.info("load wbug lightning data")
-        wbug = xarray.open_dataset(os.path.join(wbugdir, f"flash_{rptdist}km.nc"))
-        wbug = wbug.rename(dict(time_coverage_start="valid_time"))
-        logging.info(f"valid_time slice({earliest_valid_time},{latest_valid_time})")
-        wbug = wbug.sel(valid_time=slice(earliest_valid_time, latest_valid_time))
-        ltg_sums=xarray.Dataset()
-        if wbug.valid_time.size == 0:
-            logging.warning(f"no wbug times to join")
-        else:
-            for t in twin:
-                # sum counts in 30-minute blocks
-                # debug with ~ahijevyc/wbug_sum_time_window.ipynb
-                logging.info(f"sum weatherbug flashes in {t}hr time window")
-                ltg_sum = wbug.rolling(valid_time=t*2, center=True).sum()
-                # Append rptdist and twin strings to ["cg","ic"] variable names.
-                name_dict = {s: f"{s}_{rptdist}km_{t}hr" for s in ["cg","ic"]}
-                logging.info(f"rename {name_dict}")
-                ltg_sum = ltg_sum.rename(name_dict)
-                logging.info(ltg_sum.data.mean())
-                ltg_sums = ltg_sums.assign(ltg_sum)
-                
-            logging.info(f"join {wbug.valid_time.size} wbug lightning times")
-            rsuffix='wbug'
-            df = df.join(ltg_sums.to_dataframe(), rsuffix=rsuffix)
-            logging.info("joined wbug lightning data")
-            logging.debug(
-                f"Sanity check--make sure {model} and {rsuffix} lat lons are close")
-            assertclose(df, "lat", "lon", rsuffix=rsuffix)
-            df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}"])
-
-        # join Geostationary Lightning Mapper (GLM)
-        time_space_windows = [(1, rptdist), (2, rptdist), (4, rptdist)]
-        glmds = get_glm(time_space_windows,
-                        start=earliest_valid_time, end=latest_valid_time)
-        if glmds.valid_time.size == 0:
-            logging.warning(f"no GLM times to join")
-        else:
-            logging.info(f"join glm flashes with {model} DataFrame")
-            rsuffix="glm"
-            df = df.join(glmds.to_dataframe(), rsuffix=rsuffix)
-            logging.info(
-                f"Sanity check--make sure {model} and {rsuffix} lat lons are close")
-            assertclose(df, "lat", "lon", rsuffix=rsuffix)
-            df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}"])
+    # join Geostationary Lightning Mapper (GLM)
+    time_space_windows = [(t, rptdist) for t in twin]
+    glmds = get_glm(time_space_windows,
+                    start=earliest_valid_time, end=latest_valid_time)
+    if glmds.valid_time.size == 0:
+        logging.warning(f"no GLM times to join")
+    else:
+        logging.info(f"join glm flashes with {model} DataFrame")
+        rsuffix="glm"
+        df = df.join(glmds.to_dataframe(), rsuffix=rsuffix)
+        logging.info(
+            f"Sanity check--make sure {model} and {rsuffix} lat lons are close")
+        assertclose(df, "lat", "lon", rsuffix=rsuffix)
+        df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}"])
 
     logging.info("convert 64-bit to 32-bit columns")
     dtype_dict = {
@@ -426,67 +422,49 @@ def rptdist2bool(df, args):
     Also return a list of column names to be used as labels.
     """
 
-    event = args.event
-    rptdist = args.rptdist
-    twin = args.twin
-    logging.debug(f"report distance {rptdist}km {twin}h")
+    for rptdist in [20,40]:
+        labels = args.labels
+        lsrtypes = ["sighail", "sigwind", "hailone", "wind", "torn"]
+        oldtwin = [0,1,2]
+        logging.warning(f"using {oldtwin} time windows for lsrtypes until we update parquet files with [1,2,4]") 
+        label_cols = [f"{r}_rptdist_{t}hr" for r in lsrtypes for t in oldtwin]
+        # refer to new label names (with f"{rptdist}km" not f"rptdist")
+        new_label_cols = [r.replace("rptdist", f"{rptdist}km") for r in label_cols]
+        logging.info(
+            f"Convert severe report distance to boolean [0,{rptdist}km) = True")
+        df[new_label_cols] = (0 <= df[label_cols]) & (df[label_cols] < rptdist)
 
-    lsrtypes = ["sighail", "sigwind", "hailone", "wind", "torn"]
-    oldtwin = [0,1,2]
-    logging.warning(f"using {oldtwin} time windows for lsrtypes until Ryan updates them with [1,2,4]") 
-    label_cols = [f"{r}_rptdist_{t}hr" for r in lsrtypes for t in oldtwin]
-    # refer to new label names (with f"{rptdist}km" not f"rptdist")
-    renamecolumns = {r: r.replace("rptdist", f"{rptdist}km")
-                     for r in label_cols}
-    logging.info(f'rename columns {renamecolumns}')
-    df = df.rename(columns=renamecolumns, copy=False, errors="raise")
-    # Replace old label_cols list with list of new names
-    label_cols = list(renamecolumns.values())
-    logging.info(
-        f"Convert severe report distance to boolean [0,{rptdist}km) = True")
-    # faster than df[label_cols].loc[:,label_cols]
-    df[label_cols] = (0 <= df[label_cols]) & (df[label_cols] < rptdist)
+        for t in oldtwin:
+            # any type of severe storm report
+            any_label_str = f"any_{rptdist}km_{t}hr"
+            if any_label_str not in labels:
+                continue
+            labels_this_twin = [f"{r}_{rptdist}km_{t}hr" for r in lsrtypes]
+            logging.debug(f"derive {any_label_str} from {labels_this_twin}")
+            df[any_label_str] = df[labels_this_twin].any(axis="columns")
 
+        for t in twin:
+            # weatherbug flashes
+            wbug_cols = [f"{f}_{rptdist}km_{t}hr" for f in ["cg","ic"]]
+            # if any label is in wbug_cols:
+            if any([l in wbug_cols for l in labels]):
+                logging.info(f"threshold wbug at {args.flash} flashes")
+                df[wbug_cols] = df[wbug_cols] >= args.flash
+                either = f"cg.ic_{rptdist}km_{t}hr"
+                logging.info(f"{' or '.join(wbug_cols)} = {either}")
+                df[either] = df[wbug_cols].any(axis="columns")
+            else:
+                logging.info(f"no requested labels in {wbug_cols}")
+            
+            # GLM flashes
+            flash_spacetime_win = f"flashes_{rptdist}km_{t}hr"
+            if flash_spacetime_win in labels:
+                # Check if flash threshold is met in one space/time window.
+                # new flash variable name has space and time window in it.
+                logging.debug(f"threshold {flash_spacetime_win} >= {args.flash}")
+                df[flash_spacetime_win] = df[flash_spacetime_win] >= args.flash
 
-    
-    for t in oldtwin:
-        # any type of severe storm report
-        any_label_str = f"any_{rptdist}km_{t}hr"
-        labels_this_twin = [f"{r}_{rptdist}km_{t}hr" for r in lsrtypes]
-        logging.debug(f"derive {any_label_str} from {labels_this_twin}")
-        df[any_label_str] = df[labels_this_twin].any(axis="columns")
-        label_cols.append(any_label_str)
-
-    for t in twin:
-        # weatherbug flashes
-        wbug_cols = [f"{f}_{rptdist}km_{t}hr" for f in ["cg","ic"]]
-        if set(wbug_cols).issubset(df.columns):
-            logging.info(f"threshold wbug at {args.flash} flashes")
-            df[wbug_cols] = df[wbug_cols] >= args.flash
-            either = f"cg.ic_{rptdist}km_{t}hr"
-            logging.info(f"{' or '.join(wbug_cols)} = {either}")
-            df[either] = df[wbug_cols].any(axis="columns")
-            label_cols.extend(wbug_cols)
-            label_cols.append(either) # do not extend with single string either. it gets treated like an array of characters
-        else:
-            logging.warning(f"{wbug_cols} not in DataFrame")
-        
-        # GLM flashes
-        flash_spacetime_win = f"flashes_{rptdist}km_{t}hr"
-        if flash_spacetime_win in df:
-            # Check if flash threshold is met in one space/time window.
-            # new flash variable name has space and time window in it.
-            logging.debug(f"threshold {flash_spacetime_win} >= {args.flash}")
-            df[flash_spacetime_win] = df[flash_spacetime_win] >= args.flash
-            label_cols.append(flash_spacetime_win)
-        else:
-            logging.warning(f"{flash_spacetime_win} not in DataFrame")
-
-    if event is not None:
-        # Recreate a smaller label_cols list with a single event type.
-        label_cols = [f"{event}_{rptdist}km_{t}hr" for t in twin]
-
-    return df, label_cols
+    return df
 
 def get_glm(time_space_windows, date=None, start=None, end=None):
     # join Geostationary Lightning Mapper (GLM)
@@ -590,7 +568,7 @@ def upscale(field, nngridpts, type='mean', maxsize=27):
     return field_interp
 
 def get_features(args, subset=None):
-    feature_list_file = f"suite_predictors/{args.model}.{args.suite}.txt"
+    feature_list_file = f"predictor_suites/{args.model}.{args.suite}.txt"
 
     # Defined list of features in this function before Nov 24, 2022. But these 33 predictors were missing from the default suite. They weren't even in my first commit to github.
     # Why did they disappear? Maybe when I accidentally deleted my work directory in Oct 2021.
@@ -724,7 +702,7 @@ def normalize_multivariate_data(data, features, scaling_values=None, nonormalize
         scaling_values["std"] = data.std()
         log(scaling_values.info())
         if nonormalize:
-            print("ml_functions.normalize_multivariate_data(): no normalization. returning scaling_values")
+            logging.warning("ml_functions.normalize_multivariate_data(): no normalization. returning scaling_values")
             return None, scaling_values
         data = data.values 
 
@@ -753,12 +731,10 @@ def get_savedmodel_path(args, odir="nn"):
     else:
         batchnorm_str = ""
 
-    twin_str = f"_{'.'.join([str(int(t)) for t in args.twin])}hr"
-
     glmstr = f"{args.flash:02d}flash." # zero-padded flash count threshold. GLM description 
         
     neurons_str = ''.join([f"{x}n" for x in args.neurons]) # [1024] -> "1024n", [16,16] -> "16n16n"
-    savedmodel  = f"{odir}/{args.model}.{args.suite}.{glmstr}rpt_{args.rptdist}km{twin_str}.{neurons_str}.ep{args.epochs}.{fhr_str}."
+    savedmodel  = f"{odir}/{args.model}.{args.suite}.{glmstr}{neurons_str}.ep{args.epochs}.{fhr_str}."
     savedmodel += f"bs{args.batchsize}.{args.optimizer}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
         
     return savedmodel

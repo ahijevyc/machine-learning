@@ -38,9 +38,9 @@ logging.info(args)
 clobber = args.clobber
 debug = args.debug
 kfold = args.kfold
+label_cols = args.labels
 nfit = args.nfits
 nprocs = args.nprocs
-rptdist = args.rptdist
 testend = args.testend
 teststart = args.teststart
 suite = args.suite
@@ -69,7 +69,7 @@ for ifold in range(kfold):
 df = load_df(args)
 
 logging.info("convert report distance and flash count to True/False labels")
-df, label_cols = rptdist2bool(df, args)
+df = rptdist2bool(df, args)
 
 assert set(df.index.names) == set(['valid_time', 'x', 'y']), f"unexpected index names for df {df.index.names}"
 
@@ -230,6 +230,8 @@ def statjob(fhr, statcurves=None):
                 assert labels_fhr.index.equals(
                     y_pred.index), f'fit {thisfit} fold{ifold} {rpt_type} label and prediction indices differ {labels_fhr.index} {y_pred.index}'
                 bss = brier_skill_score(labels_fhr, y_pred)
+                if fhr == "all" and thisfit == 0 and ifold == 0:
+                    pd.concat([labels_fhr,y_pred], axis="columns").to_csv(f"old.{rpt_type}.csv")
                 base_rate = labels_fhr.mean()
                 auc = sklearn.metrics.roc_auc_score(
                     labels_fhr, y_pred) if labels_fhr.any() else np.nan
@@ -282,7 +284,8 @@ def statjob(fhr, statcurves=None):
             rc = ROC_curve(ROC_ax, labels_fhr, y_pred,
                            fill=False, plabel=False)
             fig.suptitle(f"{suite} {rpt_type}")
-            fig.text(0.5, 0.01, ' '.join(df.columns), wrap=True, fontsize=5)
+            fig.text(0.5, 0.01, f'{len(df.columns)} predictors {len(labels.columns)} labels ({" ".join(labels.columns)})', 
+                    wrap=True, fontsize='x-small')
             ofile = os.path.join(os.getenv("TMPDIR"),
                     f"{os.path.basename(savedmodel)}.{rpt_type}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.f{fhr}.png")
 

@@ -17,7 +17,6 @@ import visualizecv  # custom script by ahijevyc modified from sklearn web page
 import xarray
 import yaml
 
-
 def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], kernel_regularizer=None,
                    optimizer_name='Adam', dropout=0, batch_normalize=False, learning_rate=0.01):
 
@@ -39,7 +38,7 @@ def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], 
     loss = "binary_crossentropy"  # in HWT_mode, I used categorical_crossentropy
     optimizer = get_optimizer(optimizer_name, learning_rate=learning_rate)
     model.compile(loss=loss, optimizer=optimizer, metrics=[
-                  MeanSquaredError(), AUC(), "accuracy"])
+        MeanSquaredError(), AUC(), "accuracy"])
 
     return model
 
@@ -65,12 +64,12 @@ def main():
     fits = args.fits
     folds = args.folds
     kfold = args.kfold
+    label_cols = args.labels
     learning_rate = args.learning_rate
     neurons = args.neurons
     nfit = args.nfits
     optimizer_name = args.optimizer
     reg_penalty = args.reg_penalty  # L2
-    rptdist = args.rptdist
     seed = args.seed
     testend = args.testend
     teststart = args.teststart
@@ -105,19 +104,7 @@ def main():
 
     # Convert distance to closest storm report to True/False based on distance and time thresholds
     # And convert flash count to True/False based on distance, time, and flash thresholds
-    df, label_cols = rptdist2bool(df, args)
-
-    plotclimo = False
-    if plotclimo:
-        mdf = df.groupby(["lon", "lat"], numeric_only=True).sum()  # for debug plot
-        ncols=3
-        fig, axes = plt.subplots(nrows=int(np.ceil(len(label_cols)/ncols)), ncols=ncols)
-        for label, ax in zip(label_cols, axes.flatten()):
-            im = ax.scatter(mdf.index.get_level_values("lon"), mdf.index.get_level_values(
-                "lat"), c=mdf[label])  # Don't use mdf (sum) for lon/lat
-            ax.set_title(f"{label} sum")
-            fig.colorbar(im, ax=ax)
-        plt.show()
+    df = rptdist2bool(df, args)
 
     logging.info(
         f"Sort by valid_time and speed things up by dropping multiindex")
@@ -152,11 +139,11 @@ def main():
     logging.info(
         f"kept {len(df)}/{before_filtering} rows with requested forecast hours")
 
-    logging.info(f"Split {len(label_cols)} labels away from predictors")
+    logging.info(f"Split {len(label_cols)} requested labels away from predictors")
     labels = df[label_cols]  # labels converted to Boolean above
 
-    df.info()
-    print(labels.sum())
+    logging.info(df.info())
+    logging.info(labels.sum())
 
     assert all(
         labels.sum()) > 0, "some classes have no True labels in training set"

@@ -30,5 +30,4 @@ for line in sys.stdin:
         fhr_str = make_fhr_str(args.fhr)
         #print(f' {fhr_str}', end=" ")
     print(yl["labels"], end=" ")
-    print(args.twin, end=" ")
     print()

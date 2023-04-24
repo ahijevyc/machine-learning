@@ -45,7 +45,6 @@ field = args.field
 kfold = args.kfold
 nfit = args.nfits
 nprocs = args.nprocs
-rptdist = args.rptdist
 testend = args.testend
 thresh = args.thresh
 teststart = args.teststart
@@ -75,7 +74,7 @@ for ifold in range(kfold):
 df = load_df(args)
 
 logging.info("convert report distance and flash count to True/False labels")
-df, label_cols = rptdist2bool(df, args)
+df = rptdist2bool(df, args)
 
 assert set(df.index.names) == set(['valid_time', 'x', 'y']), f"unexpected index names for df {df.index.names}"
 
@@ -144,7 +143,6 @@ df.info()
 
 labels_sum = df.xs("label", axis=1, level="ctype").groupby(level="mask").sum()
 assert labels_sum.all().all() > 0, "at least 1 class has no True labels in testing set"
-labels_sum
 
 
 before_filtering = len(df.columns)
@@ -292,12 +290,9 @@ def statjob(fhr, statcurves=None):
                                fill=False,
                                plabel=False)
                 fig.suptitle(f"{suite} {rpt_type}")
-                fig.text(0.5,
-                         0.01,
-                         ' '.join(features.columns),
-                         wrap=True,
-                         fontsize=5)
-                ofile = f"{thissavedmodel}.{rpt_type}.{mask}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.f{fhr}.png"
+                fig.text(0.5, 0.01, ' '.join(features.columns), wrap=True, fontsize=5)
+                ofile = os.path.join(os.getenv("TMPDIR"),
+                        f"{thissavedmodel}.{rpt_type}.{mask}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.f{fhr}.png")
                 fig.savefig(ofile)
                 logging.info(os.path.realpath(ofile))
                 plt.clf()
