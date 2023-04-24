@@ -8,8 +8,8 @@ fi
 
 
 i=0 # number each line of command file
-ncpus=5
-mem=130GB
+ncpus=10
+mem=109GB
 walltime=3:00:00
 
 echo read $cmdfile
@@ -31,7 +31,8 @@ do
 #PBS -j oe
 #PBS -l walltime=$walltime
 #PBS -l gpu_type=v100
-#PBS -l select=1:ncpus=$ncpus:mem=$mem
+## if casper htc is sitting in the queue for a while, try ngpus=1
+#PBS -l select=1:ncpus=${ncpus}:mem=$mem 
 #PBS -o $i.test.out
 #PBS -q casper
 
@@ -40,7 +41,8 @@ cd /glade/work/ahijevyc/NSC_objects
 module load conda # if you need conda environment.
 conda activate tf2
 
-python test_stormrpts_dnn.py --nprocs $ncpus $line
+#python test_stormrpts_dnn.py --nprocs $ncpus $line
+python test_groupby.py $line
 EOS
     let "i=i+1"
 done < $cmdfile
