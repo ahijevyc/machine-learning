@@ -37,7 +37,7 @@ def readNCLcm(name):
 def upscale(field, type='mean', maxsize=27):
     if model in ['NCARENS', 'NSC3km', 'NSC3km-12sec', 'GEFS', 'HRRR', 'HRRRX']: kernel = np.ones((26,26)) #should this be 27?
     elif model in ['NSC1km']: kernel = np.ones((81,81))
-    
+
     weights = kernel / float(kernel.size)
 
     if type == 'mean':
@@ -45,7 +45,9 @@ def upscale(field, type='mean', maxsize=27):
         field = scipy.ndimage.filters.uniform_filter(field, size=maxsize, mode='constant', cval=0.0)
     elif type == 'max':
         field = scipy.ndimage.filters.maximum_filter(field, size=maxsize)
-    
+    elif type == 'min':
+        field = scipy.ndimage.filters.minimum_filter(field, size=maxsize)
+
     field_interp = field.flatten()[nngridpts[1]].reshape((65,93))
 
     return field_interp
@@ -188,6 +190,7 @@ if sdate >= datetime(2020,12,2,12,0,0):
               'SBCAPE':108, 'SBCINH':109, 'MLCINH':156, 'MLCAPE':155, 'MUCAPE':157, 'SRH01':135, 'SRH03':134, 'T2':71, 'TD2':74, 'PSFC':62, \
               'USHR6':140, 'VSHR6':141, 'USHR1':138, 'VSHR1':139, 'PREC_ACC_NC':90, 'WSPD10MAX':79, 'U10MAX': 80, 'V10MAX':81, \
               'SBLCL':154, 'CREF':1, 'REFL1KM':6, 'REFL4KM':7, 'HGT0C':142, 'RVORT1':52, \
+              'UP_HELI_MAX02':47, 'LTG1':57, 'LTG2':58, 'LTG3':59, 'HAIL_SFC':55, \
               'U500':17, 'V500':18, 'Z500':14, 'T500':15, 'TD500':16, \
               'U700':23, 'V700':24, 'Z700':19, 'T700':20, 'TD700':21, \
               'U850':28, 'V850':29, 'Z850':25, 'T850':26, 'TD850':27, \
@@ -199,6 +202,7 @@ if sdate >= datetime(2020,12,2,12,0,0):
               'SBCAPE':105, 'SBCINH':106, 'MLCINH':153, 'MLCAPE':152, 'MUCAPE':154, 'SRH01':132, 'SRH03':131, 'T2':71, 'TD2':74, 'PSFC':62, \
               'USHR6':137, 'VSHR6':138, 'USHR1':135, 'VSHR1':136, 'PREC_ACC_NC':84, 'WSPD10MAX':79, 'U10MAX': 80, 'V10MAX':81, \
               'SBLCL':151, 'CREF':1, 'REFL1KM':6, 'REFL4KM':7, 'HGT0C':139, 'RVORT1':52, \
+              'UP_HELI_MAX02':47, 'LTG1':57, 'LTG2':58, 'LTG3':59, 'HAIL_SFC':55, \
               'U500':17, 'V500':18, 'Z500':14, 'T500':15, 'TD500':16, \
               'U700':23, 'V700':24, 'Z700':19, 'T700':20, 'TD700':21, \
               'U850':28, 'V850':29, 'Z850':25, 'T850':26, 'TD850':27, \
@@ -207,10 +211,12 @@ if sdate >= datetime(2020,12,2,12,0,0):
 elif sdate >= datetime(2018,7,12,12,0,0):
     # these grib numbers are for HRRR sfc files from V3 - beginning 12z 2018 12 July
     # if forecast hour > 2
+    # LTG1, LTG2, and HAIL_SFC not available in HRRRv3
     grib_dict = { 'UP_HELI_MAX':43, 'UP_HELI_MIN':44, 'UP_HELI_MAX03':47, 'GRPL_MAX':53, 'W_UP_MAX':36, 'W_DN_MAX':37,\
                 'SBCAPE':98, 'SBCINH':99, 'MLCINH':136, 'MLCAPE':135, 'MUCAPE':141, 'SRH01':119, 'SRH03':118, 'T2':66, 'TD2':69, 'PSFC':57, \
                 'USHR6':124, 'VSHR6':125, 'USHR1':122, 'VSHR1':123, 'PREC_ACC_NC':84, 'WSPD10MAX':73, 'U10MAX': 74, 'V10MAX':75, \
                 'SBLCL':138, 'CREF':1, 'REFL1KM':5, 'REFL4KM':6, 'HGT0C':126, 'RVORT1':50, \
+                'UP_HELI_MAX02':45, 'LTG3': 54, \
                 'U500':16, 'V500':17, 'Z500':13, 'T500':14, 'TD500':15, \
                 'U700':21, 'V700':22, 'Z700':18, 'T700':19, 'TD700':20, \
                 'U850':26, 'V850':27, 'Z850':23, 'T850':24, 'TD850':25, \
@@ -221,6 +227,7 @@ elif sdate >= datetime(2018,7,12,12,0,0):
                 'SBCAPE':95, 'SBCINH':96, 'MLCINH':133, 'MLCAPE':132, 'MUCAPE':138, 'SRH01':116, 'SRH03':115, 'T2':66, 'TD2':69, 'PSFC':57, \
                 'USHR6':121, 'VSHR6':122, 'USHR1':119, 'VSHR1':120, 'PREC_ACC_NC':78, 'WSPD10MAX':73, 'U10MAX': 74, 'V10MAX':75, \
                 'SBLCL':135, 'CREF':1, 'REFL1KM':5, 'REFL4KM':6, 'HGT0C':123, 'RVORT1':50, \
+                'UP_HELI_MAX02':45, 'LTG3': 54, \
                 'U500':16, 'V500':17, 'Z500':13, 'T500':14, 'TD500':15, \
                 'U700':21, 'V700':22, 'Z700':18, 'T700':19, 'TD700':20, \
                 'U850':26, 'V850':27, 'Z850':23, 'T850':24, 'TD850':25, \
