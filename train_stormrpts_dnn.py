@@ -81,6 +81,9 @@ def main():
         logging.basicConfig(level=logging.DEBUG)
 
     if seed:
+        # If seed == -1 use the fit index as the seed
+        if seed == -1:
+            seed = fits[0]
         logging.info(f"set random seed {seed}")
         tf.keras.utils.set_random_seed(seed)
 

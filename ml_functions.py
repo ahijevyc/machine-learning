@@ -418,8 +418,7 @@ def rptdist2bool(df, args):
     """
     Return DataFrame with storm report distances and flash counts converted to Boolean.
     These columns have new names that include distance and time window. 
-    Derive "any" severe storm report and "cg.ic" labels.
-    Also return a list of column names to be used as labels.
+    Derive "any" severe storm report label and "cg.ic" label.
     """
 
     for rptdist in [20,40]:

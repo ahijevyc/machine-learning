@@ -93,7 +93,7 @@ def corr_dendro_plot(X, suite=None, dist_thresholds=dist_thresholds, importances
 
 
         fig.tight_layout()
-        ofile = os.path.realpath(f"{suite}_{d}_dendro.png")
+        ofile = os.path.realpath(f"dendro/{suite}_{d}_dendro.png")
         plt.savefig(ofile)
         print(ofile)
         plt.close()
