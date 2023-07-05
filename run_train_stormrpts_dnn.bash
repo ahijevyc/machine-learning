@@ -13,7 +13,7 @@ cmdfile=cmds.txt
 
 echo read command file $cmdfile
 
-mem=109GB
+mem=129GB
 walltime=4:30:00
 gpu=":ngpus=0"
 

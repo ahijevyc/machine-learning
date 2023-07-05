@@ -98,10 +98,7 @@ teststart = itimes.min()
 testend = itimes.max()
 ofile = os.path.realpath(
     f"{savedmodel}.{kfold}fold.{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}scores.txt")
-if not clobber and os.path.exists(ofile):
-    logging.info(
-        f"Exiting because output file {ofile} exists. Use --clobber option to override.")
-    sys.exit(0)
+assert clobber or not os.path.exists(ofile), f"Exiting because output file {ofile} exists. Use --clobber option to override."
 
 logging.info(f"output file will be {ofile}")
 
@@ -120,7 +117,10 @@ labels = df[label_cols]  # labels converted to Boolean above
 
 df.info()
 
+# TODO: is this needed?
 labels = labels.droplevel("initialization_time")
+# TODO: do we really want to change labels without changing df?
+# I know there are duplicate obs (labels) for different initialization times that share the same valid time. big deal.
 labels = labels[~labels.index.duplicated(keep="first")]
 
 assert labels.sum().all() > 0, f"at least 1 class has no True labels in testing set {labels.sum()}"
@@ -142,68 +142,68 @@ if kfold > 1:
 else:
     # Emulate a 1-split KFold object with all cases in test split.
     cvsplit = [([], np.arange(len(df)))]
-
-
-def predict(thisfit, ifold, df_fold):
+def predct(i):
+    logging.warning(i)
+    ifold, thisfit = i
     savedmodel_thisfitfold = f"{savedmodel}_{thisfit}/{kfold}fold{ifold}"
-    logging.debug(f"checking {savedmodel_thisfitfold} feature list and labels")
-    # yaml.Loader is not safe (yaml.FullLoader is) but legacy Loader handles argparse.namespace object.
     yl = yaml.load(open(
         os.path.join(savedmodel_thisfitfold, "config.yaml"), "r"),
         Loader=yaml.Loader)
-    yl_labels = yl["labels"]
-    assert yl_labels == label_cols, f"yaml labels {yl_labels} do not match input labels {label_cols}"
-    # delete labels so we can make DataFrame from rest of dictionary.
-    del (yl["labels"])
+    if "labels" in yl:
+        labels = yl["labels"]
+        # delete labels so we can make DataFrame from rest of dictionary.
+        del (yl["labels"])
+    else:
+        labels = getattr(yl["args"], "labels")
+        
     assert configs_match(
         yl["args"], args
     ), f'this configuration {args} does not match yaml file {yl["args"]}'
     del (yl["args"])
-
     # scaling values DataFrame as from .describe()
     sv = pd.DataFrame(yl).set_index("columns").T
+    if sv.columns.size != df.columns.size:
+        logging.error(
+            f"size of yaml and features columns differ {sv.columns} {df.columns}"
+        )
     assert all(
-        sv.columns == df_fold.columns
-    ), f"columns {df_fold.columns} don't match when model was trained {sv.columns}"
+        sv.columns == df.columns
+    ), f"columns {df.columns} don't match when model was trained {sv.columns}"
+
     logging.info(f"loading {savedmodel_thisfitfold}")
     model = load_model(
-        savedmodel_thisfitfold,
-        custom_objects=dict(brier_skill_score=brier_skill_score))
-    logging.info("normalizing features")
+        savedmodel_thisfitfold)
+    itrain, itest = cvsplit[ifold]
+    df_fold = df.iloc[itest]
     norm_features = (df_fold - sv.loc["mean"]) / sv.loc["std"]
-    logging.info(
-        f"predicting fold {ifold}, fit {thisfit}...")
-    # numpy array of predictions.
-    y = model.predict(norm_features.to_numpy(), batch_size=18000)
-    # Convert numpy array to DataFrame
-    y = pd.DataFrame(y, index=df_fold.index, columns=yl_labels)
-    y = pd.concat([y], keys=[thisfit], names=["fit"])
-    y = pd.concat([y], keys=[ifold], names=["fold"])
-    return y
+    # Grab numpy array of predictions.
+    Y = model.predict(norm_features.to_numpy(
+        dtype='float32'), batch_size=10000)
+    Y = pd.DataFrame(Y, columns=labels, index=df_fold.index)
+    return Y
 
 def statjob(group, labels):
     name, y_pred = group
     logging.info(f"statjob: {name}")
-    statcurves = name == ("ensmean","all","all")
+    statcurves = name == ("ensmean","all")
 
     droplevels=list(set(y_pred.index.names) - set(labels.index.names))
-    logging.debug(f"droplevel {droplevels}")
+    logging.info(f"drop {droplevels} level(s) from y_pred")
     y_pred = y_pred.droplevel(droplevels)
     labels = labels.loc[y_pred.index]
     bss = brier_skill_score(labels, y_pred)
     if name == (0, 0):
         pd.concat([labels,y_pred], axis="columns").to_csv("fit0fold0group.csv")
     base_rate = labels.mean()
-    auc, aps = {}, {}
-    for event in labels.columns:
-        if labels[event].nunique() == 1:
-            auc[event] = np.nan
-            aps[event] = np.nan
-        else:
-            auc[event] = sklearn.metrics.roc_auc_score(labels[event], y_pred[event])
-            aps[event] = sklearn.metrics.average_precision_score(labels[event], y_pred[event])
-    auc = pd.Series(auc)               
-    aps = pd.Series(aps)               
+    # Default value is np.nan
+    # Don't assign Series to auc and aps on same line or they will remain equal even if you change one
+    auc = pd.Series(np.nan, index=labels.columns)
+    aps = pd.Series(np.nan, index=labels.columns)
+    # auc and aps require 2 unique labels, i.e. both True and False
+    two = labels.nunique() == 2
+    # average=None returns a metric for each label
+    auc[two] = sklearn.metrics.roc_auc_score(          labels.loc[:,two], y_pred.loc[:,two], average=None)
+    aps[two] = sklearn.metrics.average_precision_score(labels.loc[:,two], y_pred.loc[:,two], average=None)
     n = y_pred.count()
     out = pd.DataFrame(dict(bss=bss, base_rate=base_rate, auc=auc, aps=aps, n=n))
     out.index.name = "class"
@@ -227,30 +227,28 @@ def statjob(group, labels):
             fig.suptitle(f"{suite} {event}")
             fig.text(0.5, 0.01, ' '.join(feature_list), wrap=True, fontsize=5)
             ofile = f"{savedmodel}.{event}.ensmean.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.png"
-            fig.savefig(ofile)
-            logging.info(os.path.realpath(ofile))
+            if not debug:
+                fig.savefig(ofile)
+                logging.info(os.path.realpath(ofile))
             plt.clf()
     return name, out
 
 def applyParallel(dfGrouped, func, labels):
     parallel = True
     if parallel:
-        with Pool(cpu_count()) as p:
+        with Pool(nfit) as p:
             ret_list = p.starmap(func, [(group,labels) for group in dfGrouped])
     else:
         ret_list = [func(group,labels) for group in dfGrouped]
     df = pd.concat([x[1] for x in ret_list], keys=[x[0] for x in ret_list])
     return df
 
-y_preds = []
-for ifold, (itrain, itest) in enumerate(cvsplit):
-    df_fold = df.iloc[itest]
-    with Pool(cpu_count()) as p:
-        ret_list = p.starmap(predict, [(f,ifold,df_fold) for f in range(nfit)])
-    y_preds.append(pd.concat(ret_list))
 
-logging.info(f"concat all {len(y_preds)} fold/fits for ensmean (folds do not overlap)")
-y_preds = pd.concat(y_preds, axis="index")
+index = pd.MultiIndex.from_product([range(kfold), range(nfit)], names=["fold","fit"])
+with Pool(processes=nfit) as p:
+    result = p.map(predct, index)
+y_preds = pd.concat(result, keys=index, names=index.names)
+
 logging.info("average for ensmean") 
 ensmean = y_preds.groupby(["valid_time", "y", "x", "initialization_time"]).mean()
 ensmean = pd.concat([ensmean], keys=["ensmean"], names=["fit"])
@@ -278,5 +276,6 @@ stat = applyParallel(y_preds.groupby(groupby), statjob, labels)
 stat.index.names=(*groupby,"class")
 # ensure all_fhr and stat have index levels in same order
 stat = stat.reorder_levels(all_fhr.index.names)
-pd.concat([stat, all_fhr]).to_csv(ofile)
-logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")
+if not debug:
+    pd.concat([stat, all_fhr]).to_csv(ofile)
+    logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")

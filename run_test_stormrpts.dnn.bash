@@ -8,8 +8,8 @@ fi
 
 
 i=0 # number each line of command file
-ncpus=10
-mem=109GB
+ncpus=2
+mem=170GB
 walltime=3:00:00
 
 echo read $cmdfile
@@ -41,8 +41,8 @@ cd /glade/work/ahijevyc/NSC_objects
 module load conda # if you need conda environment.
 conda activate tf2
 
-#python test_stormrpts_dnn.py --nprocs $ncpus $line
-python test_groupby.py $line
+python test_stormrpts_dnn.py --nprocs $ncpus $line
+
 EOS
     let "i=i+1"
 done < $cmdfile

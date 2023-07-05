@@ -83,7 +83,10 @@ def brier_skill_score(obs, preds):
         bs = np.mean((preds - obs) ** 2, axis=0)
         obs_climo = np.mean(obs, axis=0) # use each observed class frequency instead of 1/nclasses. Only matters if obs is multiclass.
         bs_climo = np.mean((obs - obs_climo) ** 2, axis=0)
-        bss = 1 - bs/bs_climo
+        logging.debug(bs_climo)
+        epsilon = np.finfo(bs_climo.dtype).eps
+        logging.debug(epsilon)
+        bss = 1.0 - bs/(bs_climo+epsilon)
 
     return bss
 
@@ -105,11 +108,17 @@ def configs_match(ylargs, args):
     # args.trainstart <= trainstart            trainend <= args.trainend
     assert args.trainstart <= trainstart, (f"requested start of training period {args.trainstart} is after actual training period [{trainstart},{trainend}]")
     assert trainend <= args.trainend,     (f"requested end of training period {args.trainend} is before actual training period [{trainstart},{trainend}]")
-    for key in ["batchnorm", "batchsize", "dropout", "epochs", "flash", "fhr", "kfold", "labels", "learning_rate", "model", "neurons",
+    for key in ["batchnorm", "batchsize", "dropout", "epochs", "flash", "fhr", "kfold", "learning_rate", "model", "neurons",
                 "optimizer", "reg_penalty", "suite"]:
         assert getattr(ylargs, key) == getattr(
             args, key), f'requested {key} {getattr(args,key)} does not match savedmodel yaml {key} {getattr(ylargs,key)}'
-
+    # Ignore "labels" if this is an old configuration. I used to save labels as top-level list in yaml. Now it is an attribute of ylargs Namespace.
+    # TODO: stop ignoring "labels". add it to the keys compared above. (Need to replace old dnn models with new yaml.config first) 
+    if hasattr(ylargs, "labels"):
+        ylabels = getattr(ylargs, "labels")
+        assert ylabels == args.labels, f'requested labels {args.labels} no match yaml labels {ylabels}'
+    else:
+        logging.warning(f"Can't compare labels. not part of ylargs namespace")
     return True
 
 
@@ -207,6 +216,7 @@ def get_ifile(args):
         if idate:
             ifile = os.path.join(
                 os.getenv('TMPDIR'), f"{model}.{idate.strftime('%Y%m%d%H-%M%S')}.par")
+            logging.debug(f"get_ifile: {ifile}")
     return ifile
 
 debug_replace = "202106*"
@@ -296,7 +306,8 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
         f"derive valid_time from initialization_time + forecast_hour")
     df["valid_time"] = df["initialization_time"] + pd.to_timedelta(df["forecast_hour"], unit="hours")
 
-    if model.startswith("NSC3km") or model.startswith("HRRR"):
+    need_mode_probs = [x for x in get_features(args) if "Supercell" in x or "QLCS" in x or "Disorganized" in x]
+    if need_mode_probs:
         logging.info("read mode probabilities")
         # nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
         if model.startswith("NSC3km"):
@@ -326,7 +337,7 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
         modeds = modeds.where(mask, drop=True)
 
         logging.info(f"convert mode DataArray to DataFrame")
-        modedf = modeds.to_dataframe()
+        modedf = modeds.to_dataframe() # TODO: fix HDF5 errors
         logging.info(
             f"drop all-NA rows from {len(modedf)} row storm mode DataFrame")
         modedf = modedf.dropna(how="all")
@@ -425,7 +436,7 @@ def rptdist2bool(df, args):
         labels = args.labels
         lsrtypes = ["sighail", "sigwind", "hailone", "wind", "torn"]
         oldtwin = [0,1,2]
-        logging.warning(f"using {oldtwin} time windows for lsrtypes until we update parquet files with [1,2,4]") 
+        logging.warning(f"using {oldtwin} time windows for {lsrtypes} until we update parquet files with [1,2,4]") 
         label_cols = [f"{r}_rptdist_{t}hr" for r in lsrtypes for t in oldtwin]
         # refer to new label names (with f"{rptdist}km" not f"rptdist")
         new_label_cols = [r.replace("rptdist", f"{rptdist}km") for r in label_cols]
@@ -566,7 +577,7 @@ def upscale(field, nngridpts, type='mean', maxsize=27):
 
     return field_interp
 
-def get_features(args, subset=None):
+def get_features(args):
     feature_list_file = f"predictor_suites/{args.model}.{args.suite}.txt"
 
     # Defined list of features in this function before Nov 24, 2022. But these 33 predictors were missing from the default suite. They weren't even in my first commit to github.
