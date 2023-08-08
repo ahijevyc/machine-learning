@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+import matplotlib as mpl
+mpl.use('Agg')
 from netCDF4 import Dataset
 import numpy as np
 from datetime import *
@@ -14,6 +16,7 @@ import scipy.ndimage.filters
 from scipy.interpolate import griddata, RectBivariateSpline
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
+import xarray as xr
 
 ### THIS CODE EVOLVED FROM CODE WITHIN /glade/u/home/sobash/NSC_scripts
 ### TO UPSCALE 3-KM CAM DATA TO AN 80-KM GRID
@@ -35,20 +38,24 @@ def readNCLcm(name):
     return rgb
 
 def upscale(field, type='mean', maxsize=27):
-    if model in ['NCARENS', 'NSC3km', 'NSC3km-12sec', 'GEFS', 'HRRR', 'HRRRX']: kernel = np.ones((26,26)) #should this be 27?
-    elif model in ['NSC1km']: kernel = np.ones((81,81))
+    #if model in ['NCARENS', 'NSC3km', 'NSC3km-12sec', 'GEFS', 'HRRR', 'HRRRX']: kernel = np.ones((26,26)) #should this be 27?
+    #elif model in ['NSC1km']: kernel = np.ones((81,81))
 
-    weights = kernel / float(kernel.size)
+    #weights = kernel / float(kernel.size)
 
     if type == 'mean':
         #field = scipy.ndimage.filters.convolve(field, weights=weights, mode='constant', cval=0.0)
-        field = scipy.ndimage.filters.uniform_filter(field, size=maxsize, mode='constant', cval=0.0)
+        field = scipy.ndimage.filters.uniform_filter(field, size=maxsize, mode='nearest') # changed from constant (0) to nearest
     elif type == 'max':
-        field = scipy.ndimage.filters.maximum_filter(field, size=maxsize)
+        field = scipy.ndimage.filters.maximum_filter(field, size=maxsize, mode='nearest')
     elif type == 'min':
-        field = scipy.ndimage.filters.minimum_filter(field, size=maxsize)
+        field = scipy.ndimage.filters.minimum_filter(field, size=maxsize, mode='nearest')
 
-    field_interp = field.flatten()[nngridpts[1]].reshape((65,93))
+    # fill 80-km grid points with closest upscaled 15-km data
+    # nngridpts are the indices of the closest 3-km grid points to each 80-km grid point
+    field_interp = field.flatten()[nngridpts[1]]
+    field_interp = np.where(nngridpts[0] > 20000, np.nan, field_interp) # if distance to closest 3-km grid point is > 20km, fill with np.nan (outside 3-km domain) 
+    field_interp = field_interp.reshape((65,93))
 
     return field_interp
 
@@ -89,10 +96,17 @@ def upscale_forecast(fhr):
         wrfvalidstr2 = (tdate + timedelta(hours=fhr)).strftime('%Y-%m-%d_%H:%M:%S')
      
         wrffile = "/glade/scratch/sobash/HRRR/%s/hrrr.t%sz.wrfsfcf%02d.grib2"%(yyyymmddhh,hh,fhr)
+
+        if model == 'HRRRX':
+            yyjjj = tdate.strftime('%y%j')
+            wrffile = "/glade/campaign/mmm/parc/sobash/HRRRv4/%s/%s%s00%02d00"%(yyyymmddhh,yyjjj,hh,fhr)
+
         fh = pygrib.open(wrffile)
 
-        if fhr < 2: this_grib_dict = grib_dict_fhr01
-        else: this_grib_dict = grib_dict
+        if model == 'HRRRX': this_grib_dict = grib_dict
+        else:
+            if fhr < 2: this_grib_dict = grib_dict_fhr01
+            else: this_grib_dict = grib_dict
 
         # populate dictionary of upscaled fields
         for f in this_upscaled_fields.keys():
@@ -144,12 +158,18 @@ def upscale_forecast(fhr):
             else:
                 this_field = fh[this_grib_dict[f]].values
 
-            #print(f, this_field.max())
+            # if field is masked, need to assign fill value to masked values so upscaling works correctly
+            # (e.g., SBLCL is masked along edges of HRRR domain for some reason)
+            if np.ma.is_masked(this_field): this_field = this_field.filled(fill_value=0)
 
             # use maximum for certain fields, mean for others 
-            if f in ['UP_HELI_MAX', 'UP_HELI_MAX03', 'UP_HELI_MAX01', 'W_UP_MAX', 'W_DN_MAX', 'WSPD10MAX', 'HAILCAST_DIAM_MAX']:
+            if f in ['UP_HELI_MAX', 'UP_HELI_MAX03', 'UP_HELI_MAX02', 'UP_HELI_MAX01', 'LTG1', 'LTG2', 'LTG3', 'HAIL_SFC', \
+                     'W_UP_MAX', 'WSPD10MAX', 'HAILCAST_DIAM_MAX']:
                 if model in ['NSC3km-12sec', 'HRRR', 'HRRRX']: field_interp = upscale(this_field, type='max', maxsize=27)
                 else: field_interp = upscale(this_field, type='max', maxsize=27*3)
+            elif f in ['UP_HELI_MIN', 'W_DN_MAX']:
+                if model in ['NSC3km-12sec', 'HRRR', 'HRRRX']: field_interp = upscale(this_field, type='min', maxsize=27)
+                else: field_interp = upscale(this_field, type='min', maxsize=27*3)
             elif f in ['UP_HELI_MAX80']:
                 if model in ['NSC3km-12sec', 'HRRR', 'HRRRX']: field_interp = upscale(this_field, type='max', maxsize=53)
                 else: field_interp = upscale(this_field, type='max', maxsize=53*3)
@@ -157,7 +177,7 @@ def upscale_forecast(fhr):
                 if model in ['NSC3km-12sec', 'HRRR', 'HRRRX']: field_interp = upscale(this_field, type='max', maxsize=81)
                 else: field_interp = upscale(this_field, type='max', maxsize=81*3)
             else:
-                if model in ['NSC3km-12sec', 'HRRR', 'HRRRX']: field_interp = upscale(this_field, type='mean', maxsize=26) #should be 27?
+                if model in ['NSC3km-12sec', 'HRRR', 'HRRRX']: field_interp = upscale(this_field, type='mean', maxsize=27)
                 else: field_interp = upscale(this_field, type='mean', maxsize=81)
 
             this_upscaled_fields[f] = field_interp
@@ -171,6 +191,7 @@ def upscale_forecast(fhr):
 
 ### read in date from command line
 model = 'HRRR'
+#model = 'HRRRX'
 
 sdate = datetime.strptime(sys.argv[1], '%Y%m%d%H')
 edate = sdate + timedelta(hours=24)
@@ -182,8 +203,42 @@ yyyymmdd = tdate.strftime('%Y%m%d')
 yymmdd = tdate.strftime('%y%m%d')
 hh = tdate.strftime('%H')
 
-if sdate >= datetime(2020,12,2,12,0,0):
-    # FYI - trained with 90-0 mb above ground for MLCAPE and MLCIN, fixed on 5/10 (prev code was using incorrect field for fhr>1 mlcinh and wrong mlcape field)
+if model == 'HRRRX':
+    grib_dict = { 'UP_HELI_MAX':617, 'UP_HELI_MIN':619, 'UP_HELI_MAX03':623, 'GRPL_MAX':630, 'W_UP_MAX':611, 'W_DN_MAX':612,\
+                'SBCAPE':708, 'SBCINH':709, 'MLCINH':758, 'MLCAPE':757, 'MUCAPE':759, 'SRH01':737, 'SRH03':736, 'T2':671, 'TD2':674, 'PSFC':644, \
+                'USHR6':742, 'VSHR6':743, 'USHR1':740, 'VSHR1':741, 'PREC_ACC_NC':690, 'WSPD10MAX':679, 'U10MAX':680, 'V10MAX':681, \
+                'SBLCL':756, 'CREF':601, 'REFL1KM':606, 'REFL4KM':607, 'HGT0C':744, 'RVORT1':626, \
+                'UP_HELI_MAX02':621, 'LTG1':631, 'LTG2':632, 'LTG3':633, 'HAIL_SFC': 629, \
+                'U500':277, 'V500':278, 'Z500':271, 'T500':272, 'TD500':274, \
+                'U700':397, 'V700':398, 'Z700':391, 'T700':392, 'TD700':394, \
+                'U850':487, 'V850':488, 'Z850':481, 'T850':482, 'TD850':482, \
+                'U925':532, 'V925':533, 'Z925':526, 'T925':527, 'TD925':529 }
+
+    # some fields added 29 May 2020: search FFLDRO 
+    # anything greater than 692 is affected
+    if sdate >= datetime(2020,5,29,0,0,0):
+        grib_dict = { 'UP_HELI_MAX':617, 'UP_HELI_MIN':619, 'UP_HELI_MAX03':623, 'GRPL_MAX':630, 'W_UP_MAX':611, 'W_DN_MAX':612,\
+                'SBCAPE':712, 'SBCINH':713, 'MLCINH':762, 'MLCAPE':761, 'MUCAPE':763, 'SRH01':741, 'SRH03':740, 'T2':671, 'TD2':674, 'PSFC':644, \
+                'USHR6':746, 'VSHR6':747, 'USHR1':744, 'VSHR1':745, 'PREC_ACC_NC':690, 'WSPD10MAX':679, 'U10MAX':680, 'V10MAX':681, \
+                'SBLCL':760, 'CREF':601, 'REFL1KM':606, 'REFL4KM':607, 'HGT0C':748, 'RVORT1':626, \
+                'UP_HELI_MAX02':621, 'LTG1':631, 'LTG2':632, 'LTG3':633, 'HAIL_SFC':629, \
+                'U500':277, 'V500':278, 'Z500':271, 'T500':272, 'TD500':274, \
+                'U700':397, 'V700':398, 'Z700':391, 'T700':392, 'TD700':394, \
+                'U850':487, 'V850':488, 'Z850':481, 'T850':482, 'TD850':482, \
+                'U925':532, 'V925':533, 'Z925':526, 'T925':527, 'TD925':529 }
+
+    upscaled_fields = { 'SBCAPE':[], 'MLCAPE':[], 'SBCINH':[], 'MLCINH':[], 'UP_HELI_MAX':[], 'UP_HELI_MAX03':[], 'UP_HELI_MIN':[], 'W_UP_MAX':[], 'W_DN_MAX':[],\
+                    'SRH01':[], 'SRH03':[], 'SHR01':[], 'SHR06':[], 'CAPESHEAR':[], 'T2':[], 'TD2':[], 'PSFC':[], 'PREC_ACC_NC':[], 'WSPD10MAX':[], \
+                    'UP_HELI_MAX02':[], 'LTG1':[], 'LTG2':[], 'LTG3':[], 'HAIL_SFC':[], \
+                    'UP_HELI_MAX80':[], 'UP_HELI_MAX120':[], 'SBLCL':[], 'STP':[], 'U500':[], 'V500':[], 'T500':[], 'TD500':[], 'U700':[],\
+                    'V700':[], 'T700':[], 'TD700':[], 'U850':[], 'V850':[], 'T850':[], 'TD850':[], 'U925':[], 'V925':[], 'T925':[], 'TD925':[], \
+                    'LR75':[], 'CREF':[], 'GRPL_MAX':[], 'HGT0C':[], 'RVORT1':[], 'MUCAPE':[] }
+    
+    if sdate.hour in [0,6,12,18]: nfhr      = 49 #for HRRRv4
+    else: nfhr = 19
+
+elif model == 'HRRR' and sdate >= datetime(2020,12,2,12,0,0):
+    # FYI - trained with 90-0 mb above ground for MLCAPE and MLCIN, fixed on 5/10/2021 (prev code was using incorrect field for fhr>1 mlcinh and wrong mlcape field)
     # these grib numbers are for HRRR sfc files from V4 - beginning 12z 2020 2 December
     grib_dict = { 'UP_HELI_MAX':45, 'UP_HELI_MIN':46, 'UP_HELI_MAX03':49, 'GRPL_MAX':56, 'W_UP_MAX':38, 'W_DN_MAX':39,\
               #'SBCAPE':108, 'SBCINH':109, 'MLCINH':152, 'MLCAPE':151, 'MUCAPE':157, 'SRH01':135, 'SRH03':134, 'T2':71, 'TD2':74, 'PSFC':62, \
@@ -208,7 +263,18 @@ if sdate >= datetime(2020,12,2,12,0,0):
               'U850':28, 'V850':29, 'Z850':25, 'T850':26, 'TD850':27, \
               'U925':32, 'V925':33, 'Z925':-999, 'T925':30, 'TD925':31 }
 
-elif sdate >= datetime(2018,7,12,12,0,0):
+    # only these fields will be written out 
+    upscaled_fields = { 'SBCAPE':[], 'MLCAPE':[], 'SBCINH':[], 'MLCINH':[], 'UP_HELI_MAX':[], 'UP_HELI_MAX03':[], 'UP_HELI_MIN':[], 'W_UP_MAX':[], 'W_DN_MAX':[],\
+                    'SRH01':[], 'SRH03':[], 'SHR01':[], 'SHR06':[], 'CAPESHEAR':[], 'T2':[], 'TD2':[], 'PSFC':[], 'PREC_ACC_NC':[], 'WSPD10MAX':[], \
+                    'UP_HELI_MAX02':[], 'LTG1':[], 'LTG2':[], 'LTG3':[], 'HAIL_SFC':[], \
+                    'UP_HELI_MAX80':[], 'UP_HELI_MAX120':[], 'SBLCL':[], 'STP':[], 'U500':[], 'V500':[], 'T500':[], 'TD500':[], 'U700':[],\
+                    'V700':[], 'T700':[], 'TD700':[], 'U850':[], 'V850':[], 'T850':[], 'TD850':[], 'U925':[], 'V925':[], 'T925':[], 'TD925':[], \
+                    'LR75':[], 'CREF':[], 'GRPL_MAX':[], 'HGT0C':[], 'RVORT1':[], 'MUCAPE':[] }
+
+    if sdate.hour in [0,6,12,18]: nfhr      = 49 #for HRRRv4
+    else: nfhr = 19
+
+elif model == 'HRRR' and sdate >= datetime(2018,7,12,12,0,0):
     # these grib numbers are for HRRR sfc files from V3 - beginning 12z 2018 12 July
     # if forecast hour > 2
     # LTG1, LTG2, and HAIL_SFC not available in HRRRv3
@@ -232,15 +298,20 @@ elif sdate >= datetime(2018,7,12,12,0,0):
                 'U700':21, 'V700':22, 'Z700':18, 'T700':19, 'TD700':20, \
                 'U850':26, 'V850':27, 'Z850':23, 'T850':24, 'TD850':25, \
                 'U925':30, 'V925':31, 'Z925':-999, 'T925':28, 'TD925':29 }
-else:
-    sys.exit('Grib IDs not available for HRRRv2 data')
 
-# these fields will be written out 
-upscaled_fields = { 'SBCAPE':[], 'MLCAPE':[], 'SBCINH':[], 'MLCINH':[], 'UP_HELI_MAX':[], 'UP_HELI_MAX03':[], 'W_UP_MAX':[], 'W_DN_MAX':[],\
+    # only these fields will be written out 
+    upscaled_fields = { 'SBCAPE':[], 'MLCAPE':[], 'SBCINH':[], 'MLCINH':[], 'UP_HELI_MAX':[], 'UP_HELI_MAX03':[], 'UP_HELI_MIN':[], 'W_UP_MAX':[], 'W_DN_MAX':[],\
                     'SRH01':[], 'SRH03':[], 'SHR01':[], 'SHR06':[], 'CAPESHEAR':[], 'T2':[], 'TD2':[], 'PSFC':[], 'PREC_ACC_NC':[], 'WSPD10MAX':[], \
+                    'UP_HELI_MAX02':[], 'LTG3':[], \
                     'UP_HELI_MAX80':[], 'UP_HELI_MAX120':[], 'SBLCL':[], 'STP':[], 'U500':[], 'V500':[], 'T500':[], 'TD500':[], 'U700':[],\
                     'V700':[], 'T700':[], 'TD700':[], 'U850':[], 'V850':[], 'T850':[], 'TD850':[], 'U925':[], 'V925':[], 'T925':[], 'TD925':[], \
                     'LR75':[], 'CREF':[], 'GRPL_MAX':[], 'HGT0C':[], 'RVORT1':[], 'MUCAPE':[] }
+
+    if sdate.hour in [0,6,12,18]: nfhr      = 37 #for HRRRv3
+    else: nfhr = 19
+else:
+    sys.exit('This script doesnt work for HRRRv1 or HRRRv2')
+
 
 # get closest grid boxes
 print('finding closest grid points')
@@ -248,10 +319,6 @@ nngridpts = get_closest_gridbox()
 
 # use multiprocess to run different forecast hours in parallel
 print('running upscaling in parallel')
-#nfhr      = 37
-if sdate.hour in [0,6,12,18]: nfhr      = 49 #for HRRRv4
-else: nfhr = 19
-
 nprocs    = 6
 chunksize = int(math.ceil(nfhr / float(nprocs)))
 pool      = multiprocessing.Pool(processes=nprocs)
@@ -267,20 +334,49 @@ for f in upscaled_fields.keys():
         if (len(combined[fhr][f]) > 0): upscaled_fields[f].append(combined[fhr][f])
         else: upscaled_fields[f].append(np.ones((65,93))*np.nan)
 
+# massage data into xarray dataset format
+# convert arrays to float (some need to be stored as double?)
+data_vars = {}
+for k, v in upscaled_fields.items():
+    data_vars[k] = ( ['fhr', 'y', 'x'], np.array(upscaled_fields[k]).astype(np.float32) )
+
+
+# output as xarray netcdf file
+print('Outputting netCDF')
+ds = xr.Dataset(data_vars=data_vars,
+                coords={ 'fhr': range(0,nfhr), },
+                attrs={ 'init':sdate.strftime('%Y%m%d%H') },
+                )
+
+# set up compression options
+comp = dict(zlib=True, complevel=1)
+encoding = {var: comp for var in ds.data_vars}
+
+#ds.to_netcdf('.predictions_%s_%dkm%s_%s_%s.nc'%(model,d,twin,expname,sdate.strftime('%Y%m%d%H')))
+ds.to_netcdf('/glade/work/sobash/NSC_objects/HRRR_new/grid_data/%s_%s_upscaled.nc'%(sdate.strftime('%Y%m%d%H'),model), encoding=encoding)
+ds.to_netcdf('%s_%s_upscaled.nc'%(sdate.strftime('%Y%m%d%H'),model), encoding=encoding)
+
 # save file
-np.savez_compressed('/glade/work/sobash/NSC/%s_%s_upscaled'%(sdate.strftime('%Y%m%d%H'),model), a=upscaled_fields)
+#np.savez_compressed('/glade/work/sobash/NSC/%s_%s_upscaled'%(sdate.strftime('%Y%m%d%H'),model), a=upscaled_fields)
 
 # plotting
-plotting = False 
+plotting = False
 if plotting:
-    plot_field = np.array(upscaled_fields['SBCAPE'])
+    awips = Basemap(projection='lcc', llcrnrlon=-133.459, llcrnrlat=12.19, urcrnrlon=-49.38641, urcrnrlat=57.2894, lat_1=25.0, lat_2=25.0, lon_0=-95, resolution='i', area_thresh=10000.)
+    grid81 = awips.makegrid(93, 65, returnxy=True)
+    x81, y81 = awips(grid81[0], grid81[1])
+   
+    plot_field = np.array(upscaled_fields['SBLCL'])
     print(plot_field.shape)
-    plot_field = np.amax(plot_field, axis=0)
-    
+    #plot_field = np.amax(plot_field, axis=0)
+    plot_field = plot_field[3,:]
+
+    print(plot_field.max(), plot_field.min())
     levels = np.arange(250,5000,250)
     #levels = np.arange(0,100,2.5)
-    test = readNCLcm('MPL_Reds')[10:]
-    cmap = colors.ListedColormap(test)
+    #test = readNCLcm('MPL_Reds')[10:]
+    cmap = plt.get_cmap('Reds')
+    #cmap = colors.ListedColormap(test)
     norm = colors.BoundaryNorm(levels, ncolors=cmap.N, clip=True)
     ##awips.pcolormesh(x81, y81, np.ma.masked_less(u_interp, 100.0), cmap=cmap, norm=norm)
     awips.pcolormesh(x81, y81, plot_field, cmap=cmap, norm=norm)
