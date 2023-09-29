@@ -109,30 +109,26 @@ def main():
     # And convert flash count to True/False based on distance, time, and flash thresholds
     df = rptdist2bool(df, args)
 
-    logging.info(
-        f"Sort by valid_time and speed things up by dropping multiindex")
-    df = df.sort_index(level="valid_time", ignore_index=True)
-
-    # HRRRv3 to v4 at 20201202 0z.
+    before_filtering = len(df)
     logging.info(
         f"Use initialization times in range [{trainstart}, {trainend}) for training")
-    before_filtering = len(df)
-    train_idx = (trainstart <= df.initialization_time) & (df.initialization_time < trainend)
-    df = df[train_idx]
+    idx = (trainstart <= df.initialization_time) & (df.initialization_time < trainend)
+    df = df[idx]
     setattr(args, 'trainstart', df.initialization_time.min())
     setattr(args, 'trainend', df.initialization_time.max())
     logging.info(
         f"After trimming, trainstart={args.trainstart} trainend={args.trainend}")
     logging.info(f"keep {len(df)}/{before_filtering} cases for training")
 
-    beforedropna = len(df)
-    # Used to test all columns for NA, but we only care about the feature subset being complete.
+    # Used to test all columns for NA, but we only care about the feature subset and labels_cols.
     # For example, mode probs are not available for fhr=2 but we don't need to drop fhr=2 if
     # the other features are complete.
     feature_list = get_features(args)
     logging.info(
-        f"Retain rows where all {len(feature_list)} requested features are present")
-    df = df.dropna(axis="index", subset=feature_list)
+        f"Retain rows where all {len(feature_list)} requested features "
+        f"and {len(label_cols)} labels are present")
+    beforedropna = len(df)
+    df = df.dropna(axis="index", subset=feature_list + labels_cols)
     logging.info(
         f"kept {len(df)}/{beforedropna} cases with no NA features")
 
@@ -206,7 +202,7 @@ def main():
                                        learning_rate=learning_rate)
                 model.fit(df.iloc[train_split].to_numpy(dtype='float32'), labels.iloc[train_split].to_numpy(dtype='float32'), 
                         class_weight=None, sample_weight=None, batch_size=batchsize, epochs=epochs, verbose=2)
-                logging.debug(f"saving {model_i}")
+                logging.info(f"saving {model_i}")
                 model.save(model_i)
                 del model
                 tf.keras.backend.clear_session()

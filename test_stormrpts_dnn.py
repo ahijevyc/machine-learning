@@ -4,9 +4,19 @@ import datetime
 import glob
 from hwtmode.data import decompose_circular_feature
 from hwtmode.statisticplot import count_histogram, reliability_diagram, ROC_curve
+from itertools import repeat
 import logging
 import matplotlib.pyplot as plt
-from ml_functions import brier_skill_score, configs_match, get_argparser, get_features, load_df, rptdist2bool, get_savedmodel_path
+from ml_functions import (
+        brier_skill_score,
+        configs_match,
+        get_argparser,
+        get_features,
+        get_savedmodel_path,
+        load_df,
+        predct,
+        rptdist2bool,
+)
 from multiprocessing import cpu_count, Pool
 import numpy as np
 import os
@@ -14,7 +24,6 @@ import pandas as pd
 import pdb
 import sklearn
 import sys
-from sklearn.model_selection import KFold
 from tensorflow.keras.models import load_model
 import time
 import xarray
@@ -70,58 +79,47 @@ df = load_df(args)
 logging.info("convert report distance and flash count to True/False labels")
 df = rptdist2bool(df, args)
 
-assert set(df.index.names) == set(['valid_time', 'x', 'y']), f"unexpected index names for df {df.index.names}"
-
-
-# Make initialization_time a MultiIndex level
-df = df.set_index("initialization_time", append=True)
-
-
-validtimes = df.index.get_level_values(level="valid_time")
+validtimes = df.valid_time
 logging.info(f"range of valid times: {validtimes.min()} - {validtimes.max()}")
 
-
-# This is done in train_stormrpts_dnn.py. Important to do here too.
-logging.info(f"Sort by valid_time")
-# Can't ignore_index=True like train_stormrpts_dnn.py cause we need multiindex, but it shouldn't affect order
-df = df.sort_index(level="valid_time")
-
-
-logging.info(f"Use initialization times {teststart} - {testend} for testing")
+logging.info(f"Use initialization times [{teststart}, {testend}) for testing")
 before_filtering = len(df)
-df = df.loc[:, :, :, teststart:testend]
+idx = (teststart <= df.initialization_time) & (df.initialization_time < testend)
+df = df[idx]
 logging.info(
     f"keep {len(df)}/{before_filtering} cases for testing")
 
-itimes = df.index.get_level_values(level="initialization_time")
+itimes = df.initialization_time
 teststart = itimes.min()
 testend = itimes.max()
 ofile = os.path.realpath(
     f"{savedmodel}.{kfold}fold.{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}scores.txt")
 assert clobber or not os.path.exists(ofile), f"Exiting because output file {ofile} exists. Use --clobber option to override."
-
 logging.info(f"output file will be {ofile}")
 
-# Used to test all columns for NA, but we only care about the feature subset being complete.
-# For example, mode probs are not avaiable for fhr=2 but we don't need to drop fhr=2 if
+# Put "valid_time", "y", and "x" in MultiIndex so we can group by them later.
+# Otherwise they will be lost when you subset columns by feature_list.
+# Used here and when calculating ensemble mean.
+levels = ["initialization_time", "valid_time", "y", "x"]
+df = df.set_index(levels)
+
+# Used to test all columns for NA, but we only care about the feature subset and labels_cols.
+# For example, mode probs are not available for fhr=2 but we don't need to drop fhr=2 if
 # the other features are complete.
 feature_list = get_features(args)
 logging.info(
-    f"Retain rows where all {len(feature_list)} requested features are present")
+    f"Retain rows where all {len(feature_list)} requested features "
+    f"and {len(label_cols)} labels are present")
 beforedropna = len(df)
-df = df.dropna(axis="index", subset=feature_list)
-logging.info(f"kept {len(df)}/{beforedropna} cases with no NA features")
+df = df.dropna(axis="index", subset=feature_list + labels_cols)
+logging.info(
+    f"kept {len(df)}/{beforedropna} cases with no NA features")
+
 
 logging.info(f"Split {len(label_cols)} labels away from predictors")
 labels = df[label_cols]  # labels converted to Boolean above
 
 df.info()
-
-# TODO: is this needed?
-labels = labels.droplevel("initialization_time")
-# TODO: do we really want to change labels without changing df?
-# I know there are duplicate obs (labels) for different initialization times that share the same valid time. big deal.
-labels = labels[~labels.index.duplicated(keep="first")]
 
 assert labels.sum().all() > 0, f"at least 1 class has no True labels in testing set {labels.sum()}"
 
@@ -134,66 +132,21 @@ logging.info(
     f"kept {len(df.columns)}/{len(columns_before_filtering)} features")
 
 
-if kfold > 1:
-    cv = KFold(n_splits=kfold)
-    # Convert generator to list. You don't want a generator.
-    # Generator depletes after first run of statjob, and if run serially, next time statjob is executed the entire fold loop is skipped.
-    cvsplit = list(cv.split(df))
-else:
-    # Emulate a 1-split KFold object with all cases in test split.
-    cvsplit = [([], np.arange(len(df)))]
-def predct(i):
-    logging.warning(i)
-    ifold, thisfit = i
-    savedmodel_thisfitfold = f"{savedmodel}_{thisfit}/{kfold}fold{ifold}"
-    yl = yaml.load(open(
-        os.path.join(savedmodel_thisfitfold, "config.yaml"), "r"),
-        Loader=yaml.Loader)
-    if "labels" in yl:
-        labels = yl["labels"]
-        # delete labels so we can make DataFrame from rest of dictionary.
-        del (yl["labels"])
-    else:
-        labels = getattr(yl["args"], "labels")
-        
-    assert configs_match(
-        yl["args"], args
-    ), f'this configuration {args} does not match yaml file {yl["args"]}'
-    del (yl["args"])
-    # scaling values DataFrame as from .describe()
-    sv = pd.DataFrame(yl).set_index("columns").T
-    if sv.columns.size != df.columns.size:
-        logging.error(
-            f"size of yaml and features columns differ {sv.columns} {df.columns}"
-        )
-    assert all(
-        sv.columns == df.columns
-    ), f"columns {df.columns} don't match when model was trained {sv.columns}"
-
-    logging.info(f"loading {savedmodel_thisfitfold}")
-    model = load_model(
-        savedmodel_thisfitfold)
-    itrain, itest = cvsplit[ifold]
-    df_fold = df.iloc[itest]
-    norm_features = (df_fold - sv.loc["mean"]) / sv.loc["std"]
-    # Grab numpy array of predictions.
-    Y = model.predict(norm_features.to_numpy(
-        dtype='float32'), batch_size=10000)
-    Y = pd.DataFrame(Y, columns=labels, index=df_fold.index)
-    return Y
-
 def statjob(group, labels):
-    name, y_pred = group
-    logging.info(f"statjob: {name}")
-    statcurves = name == ("ensmean","all")
+    groupname, y_pred = group
+    logging.info(f"statjob: {groupname}")
+    statcurves = (
+            "ensmean" in groupname
+            and "all" in groupname
+            and any([x for x in label_cols if x.startswith("any")])
+    )
+
 
     droplevels=list(set(y_pred.index.names) - set(labels.index.names))
-    logging.info(f"drop {droplevels} level(s) from y_pred")
+    logging.debug(f"drop {droplevels} level(s) from y_pred")
     y_pred = y_pred.droplevel(droplevels)
     labels = labels.loc[y_pred.index]
     bss = brier_skill_score(labels, y_pred)
-    if name == (0, 0):
-        pd.concat([labels,y_pred], axis="columns").to_csv("fit0fold0group.csv")
     base_rate = labels.mean()
     # Default value is np.nan
     # Don't assign Series to auc and aps on same line or they will remain equal even if you change one
@@ -201,7 +154,7 @@ def statjob(group, labels):
     aps = pd.Series(np.nan, index=labels.columns)
     # auc and aps require 2 unique labels, i.e. both True and False
     two = labels.nunique() == 2
-    # average=None returns a metric for each label
+    # average=None returns a metric for each label instead of one group average of all labels
     auc[two] = sklearn.metrics.roc_auc_score(          labels.loc[:,two], y_pred.loc[:,two], average=None)
     aps[two] = sklearn.metrics.average_precision_score(labels.loc[:,two], y_pred.loc[:,two], average=None)
     n = y_pred.count()
@@ -209,29 +162,42 @@ def statjob(group, labels):
     out.index.name = "class"
     logging.debug(out)
     if statcurves:
+        # use comma. we want a single element, not a list
+        anyc, = [x for x in label_cols if x.startswith("any")]
+        flashc, = [x for x in label_cols if x.startswith("flash")]
+        cgicc, = [x for x in label_cols if x.startswith("cg.ic")]
+        cgc, = [x for x in label_cols if x.startswith("cg_")]
+        icc, = [x for x in label_cols if x.startswith("ic_")]
+        # put more than one event type on same plot
+        event_groups = [[anyc, flashc],
+                        [anyc, cgicc],
+                        [anyc, cgc],
+                        [anyc, icc]]
+
         fig = plt.figure(figsize=(10,7))
-        for event in labels.columns:
-            logging.info(
-                f"{event} reliability diagram, histogram, & ROC curve")
+        for event_group in event_groups: 
             ax1 = plt.subplot2grid((3, 2), (0, 0), rowspan=2)
             ax2 = plt.subplot2grid((3, 2), (2, 0), rowspan=1, sharex=ax1)
             ROC_ax = plt.subplot2grid((3, 2), (0, 1), rowspan=2)
-            reliability_diagram_obj, = reliability_diagram(
-                ax1, labels[event], y_pred[event])
-            counts, bins, patches = count_histogram(ax2, y_pred[event])
-            rc = ROC_curve(ROC_ax,
-                           labels[event],
-                           y_pred[event],
-                           fill=False,
-                           plabel=False)
-            fig.suptitle(f"{suite} {event}")
+            for event in event_group:
+                logging.info(
+                    f"{groupname} {event} reliability diagram, histogram, & ROC curve")
+                reliability_diagram_obj, = reliability_diagram(
+                    ax1, labels[event], y_pred[event])
+                counts, bins, patches = count_histogram(ax2, y_pred[event], count_label=False)
+                rc = ROC_curve(ROC_ax,
+                               labels[event],
+                               y_pred[event],
+                               fill=False,
+                               plabel=False)
+            fig.suptitle(f"{suite} {event_group}")
             fig.text(0.5, 0.01, ' '.join(feature_list), wrap=True, fontsize=5)
-            ofile = f"{savedmodel}.{event}.ensmean.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.png"
+            ofile = f"{savedmodel}.{event_group}.{groupname}.statcurves{teststart.strftime('%Y%m%d%H')}-{testend.strftime('%Y%m%d%H')}.png"
             if not debug:
                 fig.savefig(ofile)
                 logging.info(os.path.realpath(ofile))
             plt.clf()
-    return name, out
+    return groupname, out
 
 def applyParallel(dfGrouped, func, labels):
     parallel = True
@@ -246,36 +212,54 @@ def applyParallel(dfGrouped, func, labels):
 
 index = pd.MultiIndex.from_product([range(kfold), range(nfit)], names=["fold","fit"])
 with Pool(processes=nfit) as p:
-    result = p.map(predct, index)
+    result = p.starmap(predct, zip(index, repeat(args), repeat(df)))
 y_preds = pd.concat(result, keys=index, names=index.names)
 
 logging.info("average for ensmean") 
-ensmean = y_preds.groupby(["valid_time", "y", "x", "initialization_time"]).mean()
+ensmean = y_preds.groupby(levels).mean()
 ensmean = pd.concat([ensmean], keys=["ensmean"], names=["fit"])
 ensmean = pd.concat([ensmean], keys=["all"], names=["fold"])
 
 logging.info("concat y_preds and ensmean")
 y_preds = pd.concat([y_preds, ensmean], axis="index")
 
+forecast_leadtime = y_preds.index.get_level_values("valid_time") - y_preds.index.get_level_values("initialization_time")
+forecast_leadtime = (forecast_leadtime / pd.Timedelta(hours=1)).astype(int)
 
+### Aggregate all forecast hours
 groupby=["fit","fold"]
 logging.info(f"calculate stats by {groupby} (aggregate all forecast hours)")
-# TODO: why does bss for forecast_hour = "all" differ from test_stormrpts_dnn.py?
 all_fhr = applyParallel(y_preds.groupby(groupby), statjob, labels) # tried as_index=True and group_keys=True but didn't change things. (thought it might keep track of index level names for me)
 all_fhr.index.names=(*groupby,"class")
 all_fhr = pd.concat([all_fhr], keys=["all"], names=["forecast_hour"])
 
-
+### Individual forecast hours
 groupby=["fit","fold","forecast_hour"]
 logging.info(f"calculate stats by {groupby}")
-forecast_leadtime = y_preds.index.get_level_values("valid_time") - y_preds.index.get_level_values("initialization_time")
-y_preds["forecast_hour"] = (forecast_leadtime / pd.Timedelta(hours=1)).astype(int)
+y_preds["forecast_hour"] = forecast_leadtime
 # don't want statjob to treat `forecast_hour` as another label like `wind_40km_1hr`
 y_preds = y_preds.set_index("forecast_hour", append=True)
 stat = applyParallel(y_preds.groupby(groupby), statjob, labels)
 stat.index.names=(*groupby,"class")
 # ensure all_fhr and stat have index levels in same order
 stat = stat.reorder_levels(all_fhr.index.names)
+
+### Aggregate in forecast_hour Time Blocks with pandas.cut
+time_block_hours = 4
+groupby=["fit","fold","forecast_hour"]
+cut_time_blocks = pd.cut(
+        forecast_leadtime, 
+        bins = range(0, max(args.fhr)+1, time_block_hours),
+        right=False)
+y_preds["forecast_hour"] = cut_time_blocks
+y_preds = y_preds.droplevel("forecast_hour") # Don't want old and new index level "forecast_hour"
+y_preds = y_preds.set_index("forecast_hour", append=True)
+stat2 = applyParallel(y_preds.groupby(groupby), statjob, labels)
+stat2.index.names=(*groupby,"class")
+# ensure all_fhr and stat have index levels in same order
+stat2 = stat2.reorder_levels(all_fhr.index.names)
+
+
 if not debug:
-    pd.concat([stat, all_fhr]).to_csv(ofile)
+    pd.concat([stat, stat2, all_fhr]).to_csv(ofile)
     logging.info(f"wrote {ofile}. Plot with \n\npython nn_scores.py {ofile}")
