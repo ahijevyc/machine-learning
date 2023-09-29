@@ -1,25 +1,34 @@
+"""
+machine learning functions
+"""
 import argparse
 import datetime
 import glob
 import logging
-import matplotlib.pyplot as plt
-import pandas as pd
+import os
 import pdb
 import pickle
-import numpy as np
-import hwtmode.statisticplot
-from hwtmode.data import decompose_circular_feature
-
-import scipy.ndimage.filters
-from sklearn.calibration import calibration_curve
-from sklearn import metrics
 import sys
+import time
+
+import dask.dataframe as ddf
+import hwtmode.statisticplot
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import scipy.ndimage.filters
+import xarray
+import yaml
+from scipy import spatial
+from sklearn import metrics
+from sklearn.model_selection import KFold
+from sklearn.calibration import calibration_curve
 from tensorflow import is_tensor
 from tensorflow.keras import backend as K
 from tensorflow.keras import optimizers
-import time
-import os
-import xarray
+from tensorflow.keras.models import load_model
+
+import G211
 
 def assertclose(df, *c, lsuffix="", rsuffix="", atol=0.1):
     # use groupby(["x","y"]).mean() here instead of comparing entire df.lon series cause
@@ -45,7 +54,6 @@ def assertclose(df, *c, lsuffix="", rsuffix="", atol=0.1):
                 logging.error(f"{lc} and {rc} are not close {xymean[[lc,rc]]}")
                 logging.error((xymean[lc] - xymean[rc]).abs().max())
                 logging.error((xymean[lc] - xymean[rc]).abs().argmax())
-                pdb.set_trace()
                 sys.exit(1)
 
 # write and read safe yaml. write argparse.Namespace as dictionary and 
@@ -67,10 +75,6 @@ Dumper.add_representer(pd.Timestamp, timestamp_representer)
 Dumper.add_representer(argparse.Namespace, namespace_representer)
 
 
-
-
-def log(msg, flush=True):
-    print( time.ctime(time.time()), msg , flush=flush)
 
 def brier_skill_score(obs, preds):
     if is_tensor(obs) and is_tensor(preds): 
@@ -141,21 +145,22 @@ def get_argparser():
     parser.add_argument('--folds', nargs="+", type=int, default=None, help="work on specific fold(s) so you can run many in parallel")
     parser.add_argument('--kfold', type=int, default=5, help="apply kfold cross validation to training set")
     parser.add_argument('--idate', type=lambda s: pd.to_datetime(s), help="single initialization time")
-    parser.add_argument('--ifile', type=str, help="Read this parquet input file. Otherwise guess which one to read.")
+    parser.add_argument('--ifile', help="Read this parquet input file. Otherwise guess which one to read.")
     parser.add_argument('--learning_rate', type=float, default=0.001, help="learning rate")
-    parser.add_argument('--model', type=str, choices=["HRRR","NSC1km","NSC3km-12sec","NSC15km"], default="HRRR", help="prediction model")
+    parser.add_argument('--model', choices=["HRRR","NSC1km","NSC3km-12sec","NSC15km"], default="HRRR", help="prediction model")
     parser.add_argument('--neurons', type=int, nargs="+", default=[16,16], help="number of neurons in each nn layer")
     parser.add_argument('--nfits', type=int, default=5, help="number of times to fit (train) model")
     parser.add_argument('--nprocs', type=int, default=0, help="verify this many forecast hours in parallel")
     parser.add_argument('--optimizer', type=str, choices=['Adam','SGD'], default='Adam', help="optimizer")
     parser.add_argument('--reg_penalty', type=float, default=0.01, help="L2 regularization factor")
-    parser.add_argument('--savedmodel', type=str, help="filename of machine learning model")
+    parser.add_argument('--savedmodel', help="filename of machine learning model")
     parser.add_argument('--seed', type=int, default=None, help="random number seed for reproducability")
     parser.add_argument('--trainend', type=lambda s: pd.to_datetime(s), help="training set end")
     parser.add_argument('--trainstart', type=lambda s: pd.to_datetime(s), default="19700101", help="training set start")
     parser.add_argument('--testend', type=lambda s: pd.to_datetime(s), default="20220101T00", help="testing set end")
     parser.add_argument('--teststart', type=lambda s: pd.to_datetime(s), default="20201202T12", help="testing set start")
-    parser.add_argument('--suite', type=str, default='default', help="name for suite of training features")
+    parser.add_argument('--twin', type=int, default=2, choices=[1,2,4], help="centered time window duration (plus/minus half this number)")
+    parser.add_argument('--suite', default='default', help="name for suite of training features")
 
     return parser
 
@@ -196,27 +201,27 @@ def get_optimizer(s, learning_rate = 0.001, **kwargs):
     return o
 
 
-def get_ifile(args):
+def get_combined_parquet_input_file(args):
     """
     Return name of parquet file that is combination of all daily input
     """
-    debug = args.debug
-    idate = args.idate
-    ifile = args.ifile
-    model = args.model
-    if ifile is None:
-        if model == "HRRR":
-            ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRXHRRR.par'
-            if debug:
-                ifile = f'/glade/work/ahijevyc/NSC_objects/{model}/HRRRX.fastdebug.par'
-        elif model.startswith("NSC"):
-            ifile = f'{model}.par'
-            if debug:
-                ifile = f'/glade/work/ahijevyc/NSC_objects/{model}_debug.par'
-        if idate:
-            ifile = os.path.join(
-                os.getenv('TMPDIR'), f"{model}.{idate.strftime('%Y%m%d%H-%M%S')}.par")
-            logging.debug(f"get_ifile: {ifile}")
+    if args.ifile is not None:
+        return ifile
+
+    ifile = os.path.join(
+            os.getenv('TMPDIR'),
+            f'{args.model}.{args.twin}hr.par'
+            )
+    if args.debug:
+        base, ext = os.path.splitext(ifile)
+        ifile = base + '.debug' + ext
+
+    if args.idate:
+        ifile = os.path.join(
+            os.getenv('TMPDIR'),
+            f"{args.model}.{args.twin}hr.{args.idate.strftime('%Y%m%d%H-%M%S')}.par"
+            )
+        logging.debug(f"get_combined_parquet_input_file: {ifile}")
     return ifile
 
 debug_replace = "202106*"
@@ -225,14 +230,14 @@ def get_ifiles(args, idir):
     """
     Return list of daily input files
     """
-    debug = args.debug
     idate = args.idate
     model = args.model
+
     # Define ifiles, a list of input files from glob.glob method
     if model == "HRRR":
         # HRRRX = experimental HRRR (v4)
         search_str = f'{idir}/HRRR_new/grid_data/grid_data_HRRRX_d01_20*00-0000.par'
-        if debug:
+        if args.debug:
             search_str = search_str.replace("HRRRX","HRRR").replace("20*", debug_replace) 
         else:
             # append HRRR to HRRRX.
@@ -249,7 +254,7 @@ def get_ifiles(args, idir):
             ifiles.extend(glob.glob(x))
     elif model.startswith("NSC"):
         search_str = f'{idir}/grid_data_new/grid_data_{model}_d01_20*00-0000.par'
-        if debug:
+        if args.debug:
             search_str = search_str.replace("20*", debug_replace)
         logging.info(f"ifiles search string {search_str}")
         ifiles = glob.glob(search_str)
@@ -267,158 +272,152 @@ def get_ifiles(args, idir):
             sys.exit(1)
         ifiles = [d]
 
-    return ifiles
+    return sorted(ifiles)
 
-# Used by load_df and rptdist2bool
-twin = [1,2,4]
 def load_df(args, idir="/glade/work/sobash/NSC_objects", 
         wbugdir="/glade/campaign/mmm/parc/ahijevyc/wbug_lightning"):
     """
     Return DataFrame with all input data for a particular model
     and grid size. Contains features and labels
     """
-    debug = args.debug
     idate = args.idate
     model = args.model
-    rptdist = 40
+    twin = args.twin
 
-    ifile = get_ifile(args)
+    ifile = get_combined_parquet_input_file(args)
     if os.path.exists(ifile):
-        logging.info(f'reading {ifile} {os.path.getsize(ifile)/1024**3:.1f}G')
+        logging.warning(f'reading {ifile} {os.path.getsize(ifile)/1024**3:.1f}G')
         df = pd.read_parquet(ifile, engine="pyarrow")
         return df
 
+    # copied and pasted from dask_HRRR_read.ipynb after testing - Aug 29, 2023
+    engine = ddf
     ifiles = get_ifiles(args, idir)
-    logging.info(f"Create {ifile} from {len(ifiles)} {model} files.")
-    # pd.read_parquet only handles one file at a time, so pd.concat
-    df = pd.concat(pd.read_parquet(f, engine="pyarrow") for f in ifiles)
+    logging.warning(f"Create {ifile} from {len(ifiles)} {model} files.")
+    fmt = "%Y%m%d%H-%M%S.par"
+    earliest_valid_time = (
+        datetime.datetime.strptime(os.path.basename(ifiles[0])[-19:], fmt) + pd.Timedelta(hours=1)
+    )
+    latest_valid_time = (
+        datetime.datetime.strptime(os.path.basename(ifiles[-1][-19:]), fmt) + pd.Timedelta(hours=48)
+    )
+    df = engine.read_parquet(ifiles, engine="pyarrow")
 
-    logging.info(f"read {len(df)} rows")
-
-    # In sobash df, xind : south to north, yind : west to east.
-    df = df.rename(columns=dict(xind="y", yind="x",
-                   Date="initialization_time", fhr="forecast_hour"), copy=False)
-
-
+    df = df.rename(
+        columns=dict(xind="y", yind="x", Date="initialization_time", fhr="forecast_hour")
+    )
     logging.info(f"convert initialization_time to datetime")
-    df["initialization_time"] = pd.to_datetime(df["initialization_time"]) # Forgot to add this before Mar 12, 2023
-    logging.info(
-        f"derive valid_time from initialization_time + forecast_hour")
-    df["valid_time"] = df["initialization_time"] + pd.to_timedelta(df["forecast_hour"], unit="hours")
+    df["initialization_time"] = engine.to_datetime(
+        df["initialization_time"], format="%Y-%m-%d %H:%M:%S"
+    )
+    logging.info(f"derive valid_time from Date + forecast_hour")
+    df["valid_time"] = df["initialization_time"] + engine.to_timedelta(
+        df["forecast_hour"], unit="hours"
+    )
+    dayofyear = df["valid_time"].dt.dayofyear
+    df["dayofyear_sin"] = np.sin(dayofyear * 2 * np.pi / 365.25)
+    df["dayofyear_cos"] = np.cos(dayofyear * 2 * np.pi / 365.25)
 
-    need_mode_probs = [x for x in get_features(args) if "Supercell" in x or "QLCS" in x or "Disorganized" in x]
-    if need_mode_probs:
-        logging.info("read mode probabilities")
-        # nco concat files from ~/bin/modeprob_concat.csh. Faster than reading individual forecast hour files.
-        if model.startswith("NSC3km"):
-            search_str = f'/glade/scratch/ahijevyc/NCAR700_objects/output_object_based/evaluation_zero_filled/20*00.nc'
-        elif model.startswith("HRRR"):
-            search_str = f'/glade/scratch/ahijevyc/HRRR_HWT_2023_data/model_output/evaluation/20*00.nc'
-        else:
-            logging.error(f"no mode probs for {model}")
-            sys.exit(1)
-        if debug:
-            search_str = search_str.replace('20*', debug_replace)
-        logging.info(f"search_str {search_str}")
-        ifiles = sorted(glob.glob(search_str))
-        logging.info(
-            f"open {len(ifiles)} daily storm mode probability files")
-        modeds = xarray.open_mfdataset(ifiles)
-        logging.info(
-            f"put usamask pickle file into xarray DataArray")
-        mask = pickle.load(open('HRRR/usamask_mod.pk', 'rb'))
-        height, width = 65, 93
-        mask = xarray.DataArray(mask.reshape((height,width)), 
-                coords=dict(y=range(height), x=range(width)), dims=["y","x"])
+    Local_Solar_Hour = df["valid_time"].dt.hour + df["lon"] / 15
+    df["Local_Solar_Hour_sin"] = np.sin(Local_Solar_Hour * 2 * np.pi / 24)
+    df["Local_Solar_Hour_cos"] = np.cos(Local_Solar_Hour * 2 * np.pi / 24)
 
-        modeds = modeds.assign_coords(dict(x=modeds.x, y=modeds.y))
-        logging.info(f"apply mask and crop coordinates")
-        # even after cropping with drop=True you still have nans. mask is not a box. It has irregular disjointed edges.
-        modeds = modeds.where(mask, drop=True)
+    # weatherbug cg, ic lightning in rptdist = 20km and 40km grids
+    # Counts begin in 30-minute bins
+    wbug_dict = {}
+    for rptdist in [20, 40]:
+        iwbug = os.path.join(wbugdir, f"flash.{rptdist}km_30min.nc")
+        logging.info(f"load wbug lightning data {iwbug}")
+        wbug = xarray.open_dataset(iwbug, chunks={"time_coverage_start": 270})
+        wbug = wbug.sel(time_coverage_start=slice(earliest_valid_time, latest_valid_time))
+        # sum counts in 30-minute blocks
+        # debug with ~ahijevyc/wbug_sum_time_window.ipynb
+        logging.info(f"sum weatherbug flashes in {twin}hr time window")
+        offset = pd.Timedelta(hours=twin/2) if twin == 1 else None
+        ltg_sum = wbug.resample(
+            time_coverage_start=f"{twin}H",
+            offset = offset,
+            skipna=True,
+        ).mean()*twin*2
+        # Valid time is half a time window after the start of the time window.
+        valid_time = ltg_sum.time_coverage_start.data + pd.Timedelta(hours=twin / 2)
+        ltg_sum = ltg_sum.assign_coords({"valid_time": (("time_coverage_start"), valid_time)}).swap_dims(
+            {"time_coverage_start": "valid_time"}
+        ) 
 
-        logging.info(f"convert mode DataArray to DataFrame")
-        modedf = modeds.to_dataframe() # TODO: fix HDF5 errors
-        logging.info(
-            f"drop all-NA rows from {len(modedf)} row storm mode DataFrame")
-        modedf = modedf.dropna(how="all")
-        # modeprobs are na for some forecast hours. So expect fewer rows than df
-        logging.info(f"{len(modedf)} remaining")
-        logging.info(f"replace 'time' with 'forecast_hour' in index")
-        modedf = modedf.set_index("forecast_hour", append=True).droplevel("time")
-        logging.info(f"join {model} DataFrame with storm mode DataFrame on y,x,init,fhr")
-        rsuffix="_mode"
-        df = df.set_index(["y", "x", "initialization_time", "forecast_hour"]).join(modedf, rsuffix=rsuffix)
-        logging.info(
-            f"joined DataFrame has {len(df)} rows")
-        assertclose(df, "lat", "lon", rsuffix=rsuffix)
-        df = df.drop(columns=[f"{c}{rsuffix}" for c in ["lat","lon","valid_time"]])
+        # Append rptdist and twin strings to ["cg","ic"] variable names.
+        name_dict = {s: f"{s}_{rptdist}km_{twin}hr" for s in ["cg", "ic"]}
+        logging.info(f"rename {name_dict}")
+        ltg_sum = ltg_sum.rename(name_dict)
+        logging.info(f"add {rptdist} to wbug_dict")
+        wbug_dict[rptdist] = ltg_sum
 
-    # Derived fields
-    df["dayofyear"] = df["valid_time"].dt.dayofyear
-    df["Local_Solar_Hour"] = df["valid_time"].dt.hour + df["lon"]/15
-    df = decompose_circular_feature(df, "dayofyear", period=365.25)
-    df = decompose_circular_feature(df, "Local_Solar_Hour", period=24)
-    logging.info(f"make valid_time an index on which additional labels can be joined")
-    df = df.reset_index().set_index(["valid_time", "y", "x"])
 
-    earliest_valid_time = df.index.get_level_values(
-        level="valid_time").min()
-    latest_valid_time = df.index.get_level_values(
-        level="valid_time").max()
+    # map rptdist=20km lightning count to nearest rptdist=40km grid point
+    lats = G211.x2().lat.ravel()
+    lons = G211.x2().lon.ravel()
+    x = G211.lon.ravel()
+    y = G211.lat.ravel()
+    tree = spatial.KDTree(list(zip(lons,lats)))
+    dist, indices = tree.query(list(zip(x,y)))
+    ltg_sum_coarse = wbug_dict[20].stack(pt=("y","x")).isel(pt=indices)
 
-    # Merge weatherbug CG and IC lightning
-    # Counts are in 30-minute bins
-    logging.info("load wbug lightning data")
-    wbug = xarray.open_dataset(os.path.join(wbugdir, f"flash_{rptdist}km.nc"))
-    wbug = wbug.rename(dict(time_coverage_start="valid_time"))
-    logging.info(f"valid_time slice({earliest_valid_time},{latest_valid_time})")
-    wbug = wbug.sel(valid_time=slice(earliest_valid_time, latest_valid_time))
-    ltg_sums=xarray.Dataset()
-    if wbug.valid_time.size == 0:
-        logging.warning(f"no wbug times to join")
-    else:
-        for t in twin:
-            # sum counts in 30-minute blocks
-            # debug with ~ahijevyc/wbug_sum_time_window.ipynb
-            logging.info(f"sum weatherbug flashes in {t}hr time window")
-            ltg_sum = wbug.rolling(valid_time=t*2, center=True).sum()
-            # Append rptdist and twin strings to ["cg","ic"] variable names.
-            name_dict = {s: f"{s}_{rptdist}km_{t}hr" for s in ["cg","ic"]}
-            logging.info(f"rename {name_dict}")
-            ltg_sum = ltg_sum.rename(name_dict)
-            logging.info(ltg_sum.mean())
-            ltg_sums = ltg_sums.assign(ltg_sum)
-            
-        logging.info(f"join {wbug.valid_time.size} wbug lightning times")
-        rsuffix='wbug'
-        df = df.join(ltg_sums.to_dataframe(), rsuffix=rsuffix)
-        logging.info("joined wbug lightning data")
-        logging.debug(
-            f"Sanity check--make sure {model} and {rsuffix} lat lons are close")
-        assertclose(df, "lat", "lon", rsuffix=rsuffix)
-        df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}"])
+    logging.info("replace rptdist=20km grid coordinates with rptdist=40km grid coordinates")
+    c = ltg_sum_coarse.coords
+    c.update(G211.mask.stack(pt=("y","x")).coords)
+    ltg_sum_coarse = ltg_sum_coarse.assign_coords(c).unstack(dim="pt")
 
-    # join Geostationary Lightning Mapper (GLM)
-    time_space_windows = [(t, rptdist) for t in twin]
-    glmds = get_glm(time_space_windows,
-                    start=earliest_valid_time, end=latest_valid_time)
-    if glmds.valid_time.size == 0:
-        logging.warning(f"no GLM times to join")
-    else:
-        logging.info(f"join glm flashes with {model} DataFrame")
-        rsuffix="glm"
-        df = df.join(glmds.to_dataframe(), rsuffix=rsuffix)
-        logging.info(
-            f"Sanity check--make sure {model} and {rsuffix} lat lons are close")
-        assertclose(df, "lat", "lon", rsuffix=rsuffix)
-        df = df.drop(columns=[f"lon{rsuffix}", f"lat{rsuffix}"])
+
+    # Used to merge Wbug with HRRR here, but now I wait until I have GLM too.
+    # If either Wbug or GLM is present (and HRRR is present) we want to keep that time.
+    # Before, if either was missing for a particular time, the whole time would be dropped
+    # because merge(how="inner") was used on a Wbug merge and a GLM merge.
+
+    # Geostationary Lightning Mapper (GLM)
+    glm40 = get_glm(
+        (twin, 40), start=earliest_valid_time, end=latest_valid_time
+    )
+    glm20 = get_glm(
+        (twin, 20), start=earliest_valid_time, end=latest_valid_time
+    ).stack(pt=("y","x")).isel(pt=indices)
+
+
+    # TODO: make sure glm40 and glm20 have same times, except for maybe the 
+    # ragged end, where one might have been pre-processed with more available times.
+
+    c = glm20.coords
+    c.update(G211.mask.stack(pt=("y","x")).coords)
+    logging.info("assign_coords, unstack pt dim")
+    # TODO: fix <__array_function__ internals>:200: RuntimeWarning: invalid value encountered in cast
+    glm20 = glm20.assign_coords(c).unstack(dim="pt")
+
+
+
+    logging.info("merge wbug20, wbug40, glm20, glm40")
+    all_ltg = xarray.merge([ltg_sum_coarse, wbug_dict[40], glm20, glm40], compat="override").to_dataframe()
+
+
+    # dask can't handle MultiIndex. use dask.dataframe.compute to convert from dask to
+    # regular Pandas DataFrame.
+    logging.info("computing dask dataframe, merging")
+    df = df.compute().merge(
+        all_ltg,
+        how="inner",
+        left_on=all_ltg.index.names,
+        right_index=True,
+        suffixes=(None, "_y"),
+    )
+
+    sanity_check=True
+    if sanity_check:
+        ll = ["lat","lon"]
+        xymean = df[["lat", "lon", "lat_y", "lon_y", "y", "x"]].groupby(["y", "x"]).mean()
+        assert np.allclose(xymean[ll], xymean[[l+"_y" for l in ll]], atol=0.289)
+
+    df = df.drop(columns=[f"lon_y", f"lat_y"])
 
     logging.info("convert 64-bit to 32-bit columns")
-    dtype_dict = {
-        k: np.float32 for k in df.select_dtypes(np.float64).columns}
-    dtype_dict.update(
-        {k: np.int32 for k in df.select_dtypes(np.int64).columns})
-    df = df.astype(dtype_dict, copy=False)
+    df = update_dtype(df)
 
     logging.info(f"writing {ifile}")
     df.to_parquet(ifile)
@@ -432,9 +431,10 @@ def rptdist2bool(df, args):
     Derive "any" severe storm report label and "cg.ic" label.
     """
 
+    twin = args.twin 
     for rptdist in [20,40]:
         labels = args.labels
-        lsrtypes = ["sighail", "sigwind", "hailone", "wind", "torn"]
+        lsrtypes = ["sighail", "sigwind", "hailone", "wind", "torn", "windmg", "svrwarn", "torwarn"]
         oldtwin = [0,1,2]
         logging.warning(f"using {oldtwin} time windows for {lsrtypes} until we update parquet files with [1,2,4]") 
         label_cols = [f"{r}_rptdist_{t}hr" for r in lsrtypes for t in oldtwin]
@@ -449,64 +449,67 @@ def rptdist2bool(df, args):
             any_label_str = f"any_{rptdist}km_{t}hr"
             if any_label_str not in labels:
                 continue
-            labels_this_twin = [f"{r}_{rptdist}km_{t}hr" for r in lsrtypes]
+            labels_this_twin = [f"{r}_{rptdist}km_{t}hr" for r in ["hailone","wind","torn"]]
             logging.debug(f"derive {any_label_str} from {labels_this_twin}")
             df[any_label_str] = df[labels_this_twin].any(axis="columns")
 
-        for t in twin:
-            # weatherbug flashes
-            wbug_cols = [f"{f}_{rptdist}km_{t}hr" for f in ["cg","ic"]]
-            # if any label is in wbug_cols:
-            if any([l in wbug_cols for l in labels]):
-                logging.info(f"threshold wbug at {args.flash} flashes")
-                df[wbug_cols] = df[wbug_cols] >= args.flash
-                either = f"cg.ic_{rptdist}km_{t}hr"
-                logging.info(f"{' or '.join(wbug_cols)} = {either}")
-                df[either] = df[wbug_cols].any(axis="columns")
-            else:
-                logging.info(f"no requested labels in {wbug_cols}")
-            
-            # GLM flashes
-            flash_spacetime_win = f"flashes_{rptdist}km_{t}hr"
-            if flash_spacetime_win in labels:
-                # Check if flash threshold is met in one space/time window.
-                # new flash variable name has space and time window in it.
-                logging.debug(f"threshold {flash_spacetime_win} >= {args.flash}")
-                df[flash_spacetime_win] = df[flash_spacetime_win] >= args.flash
+        # weatherbug flashes
+        wbug_cols = [f"{f}_{rptdist}km_{twin}hr" for f in ["cg","ic"]]
+        # if any label is in wbug_cols:
+        if any([l in wbug_cols for l in labels]):
+            logging.info(f"threshold wbug at {args.flash} flashes")
+            df[wbug_cols] = df[wbug_cols] >= args.flash
+            either = f"cg.ic_{rptdist}km_{twin}hr"
+            logging.info(f"{' or '.join(wbug_cols)} = {either}")
+            df[either] = df[wbug_cols].any(axis="columns")
+        else:
+            logging.info(f"no requested labels in {wbug_cols}")
+        
+        # GLM flashes
+        flash_spacetime_win = f"flashes_{rptdist}km_{twin}hr"
+        if flash_spacetime_win in labels:
+            # Check if flash threshold is met in one space/time window.
+            # new flash variable name has space and time window in it.
+            logging.debug(f"threshold {flash_spacetime_win} >= {args.flash}")
+            df[flash_spacetime_win] = df[flash_spacetime_win] >= args.flash
 
     return df
 
-def get_glm(time_space_windows, date=None, start=None, end=None):
+def get_glm(time_space_window, date=None, start=None, end=None, oneGLMfile=True):
     # join Geostationary Lightning Mapper (GLM)
     firstglm = pd.to_datetime("20180213")
     if end < firstglm:
         logging.warning(f"requested GLM time range [{start}-{end}] prior to first GLM day {firstglm}")
-    # Initialize Dataset to hold GLM flash count for all space/time windows.
-    ds = xarray.Dataset()
-    for twin, rptdist in time_space_windows:
-        logging.info(f"get_glm: time/space window {twin}/{rptdist}")
-        suffix = f".glm_{rptdist}km_{twin}hr.nc"
-        if date:
-            logging.info(f"date={date}")
-            glmfiles = sorted(glob.glob(f"/glade/campaign/mmm/parc/ahijevyc/GLM/{date.strftime('%Y')}/{date.strftime('%Y%m%d_%H%M')}{suffix}"))
-            glm = xarray.open_mfdataset(glmfiles, concat_dim="time", combine="nested")
-        else:
-            oneGLMfile = True
-            if oneGLMfile:
-                ifile = f"/glade/scratch/ahijevyc/temp/all{suffix}"
-                if os.path.exists(ifile):
-                    logging.info(f"open {ifile} for GLM flashes")
-                    glm = xarray.open_dataset(ifile)
-                else:
-                    logging.error(f"{ifile} does not exist. To create, concatenate GLM files:")
-                    logging.error(f"cd /glade/campaign/mmm/parc/ahijevyc/GLM")
-                    logging.error(f"find ???? -name '*{suffix}' > filelist")
-                    logging.error(f"cat filelist|ncrcat --fl_lst_in {ifile}")
-                    sys.exit(1)
+    twin, rptdist = time_space_window
+    logging.info(f"get_glm: time/space window {twin}/{rptdist}")
+    suffix = f".glm_{rptdist}km_{twin}hr.nc"
+    fmt = '%Y%m%d_%H%M'
+    if date:
+        logging.info(f"date={date}")
+        glmfiles = sorted(glob.glob(f"/glade/campaign/mmm/parc/ahijevyc/GLM/{date.strftime('%Y')}/{date.strftime(fmt)}{suffix}"))
+        glm = xarray.open_mfdataset(glmfiles, concat_dim="time", combine="nested")
+    else:
+        if oneGLMfile:
+            ifile = f"/glade/scratch/ahijevyc/temp/all{suffix}"
+            if os.path.exists(ifile):
+                logging.info(f"open {ifile} for GLM flashes")
+                glm = xarray.open_dataset(ifile)
             else:
-                glmfiles = sorted(glob.glob(f"/glade/campaign/mmm/parc/ahijevyc/GLM/{date.strftime('%Y')}/*{suffix}"))
-                logging.info("open_mfdataset")
-                glm = xarray.open_mfdataset(glmfiles, concat_dim="time", combine="nested")
+                logging.error(f"{ifile} does not exist. To create, concatenate GLM files:")
+                logging.error(f"cd /glade/campaign/mmm/parc/ahijevyc/GLM")
+                logging.error(f"find 20[0-9][0-9] -name '*{suffix}' | sort | ncrcat -D 2 -o {ifile}")
+                sys.exit(1)
+        else:
+            glmfiles = glob.glob(f"/glade/campaign/mmm/parc/ahijevyc/GLM/2[0-9][0-9][0-9]/*{suffix}")
+            logging.warning(f"found {len(glmfiles)} files")
+            glmfiles = [
+                x
+                for x in glmfiles
+                if datetime.datetime.strptime(os.path.basename(x)[:13], fmt) >= start
+                and datetime.datetime.strptime(os.path.basename(x)[:13], fmt) <= end
+            ]
+            logging.warning(f"open_mfdataset {len(glmfiles)} files in time window [{start},{end}]")
+            glm = xarray.open_mfdataset(glmfiles, concat_dim="time", combine="nested")
 
         assert (glm.time[1] - glm.time[0]) == np.timedelta64(3600,'s'), 'glm.time interval not 1h'
 
@@ -517,21 +520,20 @@ def get_glm(time_space_windows, date=None, start=None, end=None):
         newcol = f"flashes_{rptdist}km_{twin}hr"
         logging.info(f"Store in new DataArray {newcol}")
         glm = glm.rename(dict(time="valid_time",flashes=newcol))
-        ds = ds.assign(variables=glm)
-    if ds.valid_time.size == 0:
+    if glm.valid_time.size == 0:
         logging.warning(f"GLM Dataset is empty.")
-    return ds
+    return glm
 
 
-def print_scores(obs, fcst, label, desc="", n_bins=10, debug=False):
+def print_scores(obs, fcst, label, desc="", n_bins=10):
 
     # print scores for this set of forecasts
     # histogram of probability values
-    print(np.histogram(fcst, bins=n_bins))
+    logging.debug(np.histogram(fcst, bins=n_bins))
 
     # reliability curves
     true_prob, fcst_prob = calibration_curve(obs, fcst, n_bins=n_bins)
-    for o, f in zip(true_prob, fcst_prob): print(o, f)
+    for o, f in zip(true_prob, fcst_prob): logging.info(o, f)
 
     print('brier score', np.mean((obs-fcst)**2))
 
@@ -548,16 +550,16 @@ def print_scores(obs, fcst, label, desc="", n_bins=10, debug=False):
     fig_index=1
     fig = plt.figure(fig_index, figsize=(10, 7))
     ax1 = plt.subplot2grid((3,2), (0,0), rowspan=2)
-    reld = hwtmode.statisticplot.reliability_diagram(ax1, obs, fcst, label=label, n_bins=n_bins, debug=debug)
+    reld = hwtmode.statisticplot.reliability_diagram(ax1, obs, fcst, label=label, n_bins=n_bins)
     ax1.tick_params(axis='x', labelbottom=False)
  
     """histogram of counts"""
     ax2 = plt.subplot2grid((3,2), (2,0), rowspan=1, sharex=ax1)
-    histogram_of_counts = hwtmode.statisticplot.count_histogram(ax2, fcst, label=label, n_bins=n_bins, debug=debug)
+    histogram_of_counts = hwtmode.statisticplot.count_histogram(ax2, fcst, label=label, n_bins=n_bins)
     ROC_ax = plt.subplot2grid((3,2), (0,1), rowspan=2)
-    roc_curve = hwtmode.statisticplot.ROC_curve(ROC_ax, obs, fcst, label=label, sep=0.1, debug=debug)
+    roc_curve = hwtmode.statisticplot.ROC_curve(ROC_ax, obs, fcst, label=label, sep=0.1)
     fineprint = f"{desc} {label}\ncreated {str(datetime.datetime.now(tz=None)).split('.')[0]}"
-    plt.annotate(s=fineprint, xy=(1,1), xycoords=('figure pixels', 'figure pixels'), va="bottom", fontsize=5) 
+    plt.annotate(text=fineprint, xy=(1,1), xycoords=('figure pixels', 'figure pixels'), va="bottom", fontsize='xx-small') 
     ofile = f'{desc}.{label}.png'
     plt.savefig(ofile)
     print("made", os.path.realpath(ofile))
@@ -632,16 +634,71 @@ def make_fhr_str(fhr):
     return final_str
 
 
+def predct(i, args, df):
+    """
+    Return DataFrame of predictions for this (ifold, thisfit).
+    Used global variable features dataframe, df.
+    Used by test_stormrpts_dnn.py and lightning_prob.ipynb.
+    """
+    ifold, thisfit = i
+    savedmodel = get_savedmodel_path(args)
+    savedmodel_thisfitfold = f"{savedmodel}_{thisfit}/{args.kfold}fold{ifold}"
+    logging.warning(f"{i} {savedmodel_thisfitfold}")
+    yl = yaml.load(open(
+        os.path.join(savedmodel_thisfitfold, "config.yaml"), "r"),
+        Loader=yaml.Loader)
+    if "labels" in yl:
+        labels = yl["labels"]
+        # delete labels so we can make DataFrame from rest of dictionary.
+        del (yl["labels"])
+    else:
+        labels = getattr(yl["args"], "labels")
+        
+    assert configs_match(
+        yl["args"], args
+    ), f'this configuration {args} does not match yaml file {yl["args"]}'
+    del (yl["args"])
+    # scaling values DataFrame as from .describe()
+    sv = pd.DataFrame(yl).set_index("columns").T
+    if sv.columns.size != df.columns.size:
+        logging.error(
+            f"size of yaml and features columns differ {sv.columns} {df.columns}"
+        )
+    assert all(
+        sv.columns == df.columns
+    ), f"columns {df.columns} don't match when model was trained {sv.columns}"
+
+    logging.info(f"loading {savedmodel_thisfitfold}")
+    model = load_model(
+        savedmodel_thisfitfold)
+    df_fold = df
+    if args.kfold > 1:
+        cv = KFold(n_splits=args.kfold)
+        # Convert generator to list. You don't want a generator.
+        # Generator depletes after first run of statjob, and if run serially,
+        # next time statjob is executed the entire fold loop is skipped.
+        cvsplit = list(cv.split(df))
+        itrain, itest = cvsplit[ifold]
+        df_fold = df.iloc[itest]
+    norm_features = (df_fold - sv.loc["mean"]) / sv.loc["std"]
+    # Grab numpy array of predictions.
+    Y = model.predict(norm_features.to_numpy(
+        dtype='float32'), batch_size=10000)
+    Y = pd.DataFrame(Y, columns=labels, index=df_fold.index)
+    return Y
+
+
+
 def read_csv_files(sdate, edate, dataset, members=[str(x) for x in range(1,11)], columns=None):
     # read in all CSV files for 1km forecasts
     all_files = []
     for member in members:
         all_files.extend(glob.glob(f'/glade/scratch/ahijevyc/NSC_objects/grid_data_{dataset}_mem{member}_d01_????????-0000.par'))
     all_files = set(all_files) # in case you ask for same member twice
-    log("found "+str(len(all_files))+" files")
+    logging.debug("found "+str(len(all_files))+" files")
     all_files = [x for x in all_files if sdate.strftime('%Y%m%d') <= x[-17:-9] <= edate.strftime('%Y%m%d')]
     all_files = sorted(all_files) # important for predictions_labels output
-    log(f'Reading {len(all_files)} forecasts from {sdate} to {edate}')
+    logging.debug(f'Reading {len(all_files)} forecasts from {sdate} to {edate}')
 
     #df = pd.concat((pd.read_csv(f, compression='gzip', dtype=type_dict) for f in all_files))
     #df = pd.concat((pd.read_csv(f, dtype=type_dict) for f in all_files))
@@ -652,9 +709,9 @@ def read_csv_files(sdate, edate, dataset, members=[str(x) for x in range(1,11)],
     else:
         print("unexpected extension", ext,"exiting")
         sys.exit(1)
-    log('finished reading')
+    logging.debug('finished reading')
     if 'member' not in df.columns: # started adding member in previous step (random_forest_preprocess_gridded.py)
-        log('adding members column')
+        logging.debug('adding members column')
         import re
         member = [re.search("_mem(\d+)",s).groups()[0] for s in all_files]
         # repeat each element n times. where n is number of rows in a single file's dataframe
@@ -666,28 +723,28 @@ def read_csv_files(sdate, edate, dataset, members=[str(x) for x in range(1,11)],
     #df.columns = [' '.join(col).strip() for col in df.columns.values]
     #df = df.reset_index('Date') 
     if 'datetime' not in df.columns:
-        log('adding datetime')
+        logging.debug('adding datetime')
         df['datetime']  = pd.to_datetime(df['Date'])
     #df['Run_Date'] = pd.to_datetime(df['Date']) - pd.to_timedelta(df['fhr'])
     if 'year' not in df.columns:
-        log('adding year')
+        logging.debug('adding year')
         df['year']      = df['datetime'].dt.year.astype(np.uint16)
     if 'month' not in df.columns:
-        log('adding month')
+        logging.debug('adding month')
         df['month']     = df['datetime'].dt.month.astype(np.uint8)
     if 'hour' not in df.columns:
-        log('adding hour')
+        logging.debug('adding hour')
         df['hour']      = df['datetime'].dt.hour.astype(np.uint8)
     if 'dayofyear' not in df.columns:
-        log('adding dayofyear')
+        logging.debug('adding dayofyear')
         df['dayofyear'] = df['datetime'].dt.dayofyear.astype(np.uint16)
-    log('leaving read_csv()')
+    logging.debug('leaving read_csv()')
 
 
 
     return df, len(all_files)
 
-def normalize_multivariate_data(data, features, scaling_values=None, nonormalize=False, debug=False):
+def normalize_multivariate_data(data, features, scaling_values=None, nonormalize=False):
     """
     Normalize each channel in the 4 dimensional data matrix independently.
 
@@ -699,18 +756,18 @@ def normalize_multivariate_data(data, features, scaling_values=None, nonormalize
     Returns:
         normalized data array, scaling_values
     """
-    log(data.shape)
+    logging.debug(data.shape)
     if hasattr(data, "dtype"):
-        log(data.dtype)
+        logging.debug(data.dtype)
     scale_cols = ["mean", "std"]
     if scaling_values is None:
         data = data[features]
-        log(data.info())
+        logging.debug(data.info())
         scaling_values = pd.DataFrame(columns=scale_cols)
         scaling_values["mean"] = data.mean()
-        log(scaling_values.info())
+        logging.debug(scaling_values.info())
         scaling_values["std"] = data.std()
-        log(scaling_values.info())
+        logging.debug(scaling_values.info())
         if nonormalize:
             logging.warning("ml_functions.normalize_multivariate_data(): no normalization. returning scaling_values")
             return None, scaling_values
@@ -721,13 +778,19 @@ def normalize_multivariate_data(data, features, scaling_values=None, nonormalize
     for i in range(data.shape[-1]):
         #normed_data[:, i] = (data[:, i] - scaling_values.loc[i, "mean"]) / scaling_values.loc[i, "std"]
         normed_data[:, i] = (data[:, i] - scaling_values.loc[features[i], "mean"]) / scaling_values.loc[features[i], "std"]
-        if debug:
-            print()
-            log(scaling_values.loc[features[i]])
-        else:
-            print(features[i])
+        logging.debug(scaling_values.loc[features[i]])
+        logging.info(features[i])
     return normed_data, scaling_values
 
+
+def update_dtype(df):
+    logging.debug("convert 64-bit to 32-bit columns")
+    dtype_dict = {
+        k: np.float32 for k in df.select_dtypes(np.float64).columns}
+    dtype_dict.update(
+        {k: np.int32 for k in df.select_dtypes(np.int64).columns})
+    df = df.astype(dtype_dict)
+    return df
 
 def get_savedmodel_path(args, odir="nn"):
     # Use path requested on command line, if available.
