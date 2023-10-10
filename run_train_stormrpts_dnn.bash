@@ -13,9 +13,9 @@ cmdfile=cmds.txt
 
 echo read command file $cmdfile
 
-mem=129GB
-walltime=4:30:00
-gpu=":ngpus=0"
+mem=160GB
+walltime=4:00:00
+gpu=":ngpus=1"
 
 # Loop through commands file one line at a time
 # enumerate the cmd lines starting with zero
@@ -48,7 +48,6 @@ do
 
 cd /glade/work/ahijevyc/NSC_objects
 
-module load conda # if you need conda environment.
 conda activate tf2
 
 python train_stormrpts_dnn.py --fits $fit --folds $fold $line 

@@ -103,7 +103,7 @@ logging.info(f"output file will be {ofile}")
 levels = ["initialization_time", "valid_time", "y", "x"]
 df = df.set_index(levels)
 
-# Used to test all columns for NA, but we only care about the feature subset and labels_cols.
+# Used to test all columns for NA, but we only care about the feature subset and label_cols.
 # For example, mode probs are not available for fhr=2 but we don't need to drop fhr=2 if
 # the other features are complete.
 feature_list = get_features(args)
@@ -111,7 +111,7 @@ logging.info(
     f"Retain rows where all {len(feature_list)} requested features "
     f"and {len(label_cols)} labels are present")
 beforedropna = len(df)
-df = df.dropna(axis="index", subset=feature_list + labels_cols)
+df = df.dropna(axis="index", subset=feature_list + label_cols)
 logging.info(
     f"kept {len(df)}/{beforedropna} cases with no NA features")
 

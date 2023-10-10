@@ -87,6 +87,10 @@ def main():
         if mask is not None:
             dfs = dfs[dfs["mask"].isin(mask)]
 
+
+    # ignore forecast hour ranges like "[4, 8)"
+    dfs = dfs[~dfs.forecast_hour.str.startswith("[")]
+
     # Append fold to fit and drop fold column.
     dfs["fit"] = dfs["fit"] + "." + dfs["fold"]
     dfs = dfs.drop(columns="fold")

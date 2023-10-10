@@ -120,7 +120,7 @@ def main():
         f"After trimming, trainstart={args.trainstart} trainend={args.trainend}")
     logging.info(f"keep {len(df)}/{before_filtering} cases for training")
 
-    # Used to test all columns for NA, but we only care about the feature subset and labels_cols.
+    # Used to test all columns for NA, but we only care about the feature subset and label_cols.
     # For example, mode probs are not available for fhr=2 but we don't need to drop fhr=2 if
     # the other features are complete.
     feature_list = get_features(args)
@@ -128,7 +128,7 @@ def main():
         f"Retain rows where all {len(feature_list)} requested features "
         f"and {len(label_cols)} labels are present")
     beforedropna = len(df)
-    df = df.dropna(axis="index", subset=feature_list + labels_cols)
+    df = df.dropna(axis="index", subset=feature_list + label_cols)
     logging.info(
         f"kept {len(df)}/{beforedropna} cases with no NA features")
 
@@ -141,8 +141,9 @@ def main():
     logging.info(f"Split {len(label_cols)} requested labels away from predictors")
     labels = df[label_cols]  # labels converted to Boolean above
 
-    logging.info(df.info())
-    logging.info(labels.sum())
+    # info method prints summary of DataFrame and returns None.
+    df.info()
+    print(labels.sum())
 
     assert all(
         labels.sum()) > 0, "some classes have no True labels in training set"
