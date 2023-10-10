@@ -16,6 +16,7 @@ import hwtmode.statisticplot
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from pathlib import Path
 import scipy.ndimage.filters
 import xarray
 import yaml
@@ -275,19 +276,29 @@ def get_ifiles(args, idir):
     return sorted(ifiles)
 
 def load_df(args, idir="/glade/work/sobash/NSC_objects", 
-        wbugdir="/glade/campaign/mmm/parc/ahijevyc/wbug_lightning"):
+        wbugdir="/glade/campaign/mmm/parc/ahijevyc/wbug_lightning",
+        index_cols = ["initialization_time", "valid_time", "y", "x"]):
     """
     Return DataFrame with all input data for a particular model
-    and grid size. Contains features and labels
+    and grid size. Contains features, labels, and index_cols
     """
     idate = args.idate
     model = args.model
     twin = args.twin
 
     ifile = get_combined_parquet_input_file(args)
+
+    feature_list = get_features(args)
+    columns = feature_list + args.labels + index_cols
+
     if os.path.exists(ifile):
-        logging.warning(f'reading {ifile} {os.path.getsize(ifile)/1024**3:.1f}G')
-        df = pd.read_parquet(ifile, engine="pyarrow")
+        logging.warning(
+                f'reading {ifile} {os.path.getsize(ifile)/1024**3:.1f}G '
+                f'mtime {time.ctime(os.path.getmtime(ifile))} '
+                f'{len(feature_list)} features {len(args.labels)} labels '
+                f'and {len(index_cols)} index_cols'
+                )
+        df = pd.read_parquet(ifile, engine="pyarrow", columns=columns)
         return df
 
     # copied and pasted from dask_HRRR_read.ipynb after testing - Aug 29, 2023
@@ -329,11 +340,14 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
         iwbug = os.path.join(wbugdir, f"flash.{rptdist}km_30min.nc")
         logging.info(f"load wbug lightning data {iwbug}")
         wbug = xarray.open_dataset(iwbug, chunks={"time_coverage_start": 270})
-        wbug = wbug.sel(time_coverage_start=slice(earliest_valid_time, latest_valid_time))
-        # sum counts in 30-minute blocks
+        wbug["cg.ic"] = wbug.cg + wbug.ic
+        wbugtimes = slice(earliest_valid_time, latest_valid_time - pd.Timedelta(minutes=30))
+        wbug = wbug.sel(time_coverage_start=wbugtimes)
+        # mean of 30-minute lightning in time window
         # debug with ~ahijevyc/wbug_sum_time_window.ipynb
         logging.info(f"sum weatherbug flashes in {twin}hr time window")
         offset = pd.Timedelta(hours=twin/2) if twin == 1 else None
+        # resample requires non-overlapping time windows, but GLM's time windows overlap.
         ltg_sum = wbug.resample(
             time_coverage_start=f"{twin}H",
             offset = offset,
@@ -345,11 +359,11 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
             {"time_coverage_start": "valid_time"}
         ) 
 
-        # Append rptdist and twin strings to ["cg","ic"] variable names.
-        name_dict = {s: f"{s}_{rptdist}km_{twin}hr" for s in ["cg", "ic"]}
+        # Append rptdist and twin strings to wbug variable names.
+        name_dict = {s: f"{s}_{rptdist}km_{twin}hr" for s in ["cg", "ic", "cg.ic"]}
         logging.info(f"rename {name_dict}")
         ltg_sum = ltg_sum.rename(name_dict)
-        logging.info(f"add {rptdist} to wbug_dict")
+        logging.info(f"add rptdist={rptdist}km to wbug_dict")
         wbug_dict[rptdist] = ltg_sum
 
 
@@ -362,7 +376,7 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
     dist, indices = tree.query(list(zip(x,y)))
     ltg_sum_coarse = wbug_dict[20].stack(pt=("y","x")).isel(pt=indices)
 
-    logging.info("replace rptdist=20km grid coordinates with rptdist=40km grid coordinates")
+    logging.info("replace half-grid coordinates with full-grid coordinates")
     c = ltg_sum_coarse.coords
     c.update(G211.mask.stack(pt=("y","x")).coords)
     ltg_sum_coarse = ltg_sum_coarse.assign_coords(c).unstack(dim="pt")
@@ -408,7 +422,7 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
         suffixes=(None, "_y"),
     )
 
-    sanity_check=True
+    sanity_check=False
     if sanity_check:
         ll = ["lat","lon"]
         xymean = df[["lat", "lon", "lat_y", "lon_y", "y", "x"]].groupby(["y", "x"]).mean()
@@ -421,14 +435,16 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
 
     logging.info(f"writing {ifile}")
     df.to_parquet(ifile)
-    return df
+
+    # Saved all columns to parquet, but only return columns subset.
+    return df[columns]
 
 
 def rptdist2bool(df, args):
     """
+    Derive "any" severe storm report label
     Return DataFrame with storm report distances and flash counts converted to Boolean.
     These columns have new names that include distance and time window. 
-    Derive "any" severe storm report label and "cg.ic" label.
     """
 
     twin = args.twin 
@@ -436,7 +452,7 @@ def rptdist2bool(df, args):
         labels = args.labels
         lsrtypes = ["sighail", "sigwind", "hailone", "wind", "torn", "windmg", "svrwarn", "torwarn"]
         oldtwin = [0,1,2]
-        logging.warning(f"using {oldtwin} time windows for {lsrtypes} until we update parquet files with [1,2,4]") 
+        logging.warning(f"use {oldtwin} time win for {len(lsrtypes)} lsrtypes until parquet renamed [1,2,4]") 
         label_cols = [f"{r}_rptdist_{t}hr" for r in lsrtypes for t in oldtwin]
         # refer to new label names (with f"{rptdist}km" not f"rptdist")
         new_label_cols = [r.replace("rptdist", f"{rptdist}km") for r in label_cols]
@@ -454,16 +470,9 @@ def rptdist2bool(df, args):
             df[any_label_str] = df[labels_this_twin].any(axis="columns")
 
         # weatherbug flashes
-        wbug_cols = [f"{f}_{rptdist}km_{twin}hr" for f in ["cg","ic"]]
-        # if any label is in wbug_cols:
-        if any([l in wbug_cols for l in labels]):
-            logging.info(f"threshold wbug at {args.flash} flashes")
-            df[wbug_cols] = df[wbug_cols] >= args.flash
-            either = f"cg.ic_{rptdist}km_{twin}hr"
-            logging.info(f"{' or '.join(wbug_cols)} = {either}")
-            df[either] = df[wbug_cols].any(axis="columns")
-        else:
-            logging.info(f"no requested labels in {wbug_cols}")
+        wbug_cols = [f"{f}_{rptdist}km_{twin}hr" for f in ["cg","ic","cg.ic"]]
+        logging.info(f"threshold wbug at {args.flash} flashes")
+        df[wbug_cols] = df[wbug_cols] >= args.flash
         
         # GLM flashes
         flash_spacetime_win = f"flashes_{rptdist}km_{twin}hr"
@@ -514,7 +523,7 @@ def get_glm(time_space_window, date=None, start=None, end=None, oneGLMfile=True)
         assert (glm.time[1] - glm.time[0]) == np.timedelta64(3600,'s'), 'glm.time interval not 1h'
 
         time = slice(start, end)
-        logging.info(f"trim GLM to time window {time}")
+        logging.info(f"trim GLM to {time}")
         glm = glm.sel(time=time)
 
         newcol = f"flashes_{rptdist}km_{twin}hr"
@@ -560,9 +569,9 @@ def print_scores(obs, fcst, label, desc="", n_bins=10):
     roc_curve = hwtmode.statisticplot.ROC_curve(ROC_ax, obs, fcst, label=label, sep=0.1)
     fineprint = f"{desc} {label}\ncreated {str(datetime.datetime.now(tz=None)).split('.')[0]}"
     plt.annotate(text=fineprint, xy=(1,1), xycoords=('figure pixels', 'figure pixels'), va="bottom", fontsize='xx-small') 
-    ofile = f'{desc}.{label}.png'
+    ofile = Path(os.getenv('TMPDIR')) / f'{desc}.{label}.png'
     plt.savefig(ofile)
-    print("made", os.path.realpath(ofile))
+    print("made", ofile)
     return true_prob, fcst_prob, bss_val, auc
 
 def upscale(field, nngridpts, type='mean', maxsize=27):
