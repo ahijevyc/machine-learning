@@ -120,17 +120,7 @@ def main():
         f"After trimming, trainstart={args.trainstart} trainend={args.trainend}")
     logging.info(f"keep {len(df)}/{before_filtering} cases for training")
 
-    # Used to test all columns for NA, but we only care about the feature subset and label_cols.
-    # For example, mode probs are not available for fhr=2 but we don't need to drop fhr=2 if
-    # the other features are complete.
     feature_list = get_features(args)
-    logging.info(
-        f"Retain rows where all {len(feature_list)} requested features "
-        f"and {len(label_cols)} labels are present")
-    beforedropna = len(df)
-    df = df.dropna(axis="index", subset=feature_list + label_cols)
-    logging.info(
-        f"kept {len(df)}/{beforedropna} cases with no NA features")
 
     before_filtering = len(df)
     logging.info(f"Retain rows with requested forecast hours {fhr}")

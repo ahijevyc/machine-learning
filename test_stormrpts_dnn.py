@@ -76,12 +76,16 @@ for ifold in range(kfold):
 
 df = load_df(args)
 
+feature_list = get_features(args)
+
 logging.info("convert report distance and flash count to True/False labels")
 df = rptdist2bool(df, args)
 
 validtimes = df.valid_time
 logging.info(f"range of valid times: {validtimes.min()} - {validtimes.max()}")
 
+# TODO: use valid time to split training and testing sets, here and in Jupyter notebooks and training script(s).
+# and possibly other scripts?
 logging.info(f"Use initialization times [{teststart}, {testend}) for testing")
 before_filtering = len(df)
 idx = (teststart <= df.initialization_time) & (df.initialization_time < testend)
@@ -102,18 +106,6 @@ logging.info(f"output file will be {ofile}")
 # Used here and when calculating ensemble mean.
 levels = ["initialization_time", "valid_time", "y", "x"]
 df = df.set_index(levels)
-
-# Used to test all columns for NA, but we only care about the feature subset and label_cols.
-# For example, mode probs are not available for fhr=2 but we don't need to drop fhr=2 if
-# the other features are complete.
-feature_list = get_features(args)
-logging.info(
-    f"Retain rows where all {len(feature_list)} requested features "
-    f"and {len(label_cols)} labels are present")
-beforedropna = len(df)
-df = df.dropna(axis="index", subset=feature_list + label_cols)
-logging.info(
-    f"kept {len(df)}/{beforedropna} cases with no NA features")
 
 
 logging.info(f"Split {len(label_cols)} labels away from predictors")

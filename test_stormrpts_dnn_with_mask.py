@@ -122,16 +122,6 @@ if not clobber and os.path.exists(ofile):
 
 logging.info(f"output file will be {ofile}")
 
-# Used to test all columns for NA, but we only care about the feature subset being complete.
-# For example, mode probs are not avaiable for fhr=2 but we don't need to drop fhr=2 if
-# the other features are complete.
-feature_list = get_features(args)
-logging.info(
-    f"Retain rows where all {len(feature_list)} requested features are present")
-beforedropna = len(df)
-df = df.dropna(axis="index", subset=feature_list)
-logging.info(f"kept {len(df)}/{beforedropna} cases with no NA features")
-
 logging.info("Define mask and append to index")
 
 mask = pd.Series(np.select([df[(field, "feature")] >= thresh], [
