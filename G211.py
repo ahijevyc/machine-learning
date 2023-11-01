@@ -1,16 +1,14 @@
 import cartopy.crs as ccrs
+import geopandas
 import numpy as np
 import os
+import pandas as pd
+import pdb
 import pickle
+from shapely.geometry import Polygon
 import xarray
 
 g211 = ccrs.LambertConformal(central_longitude=-95, standard_parallels=(25,25))
-
-# TODO: Depreciate width and height in favor of nlon and nlat
-nlon = 93
-nlat = 65
-width = nlon
-height = nlat
 
 ll_lon = -133.459
 ll_lat=12.19
@@ -24,6 +22,29 @@ ur_lat=57.2894
     np.array([ll_lat, ur_lat])
     )
 
+# depreciated width and height in favor of nlon and nlat
+nlon = 93
+nlat = 65
+
+
+def getgdf(nlon: int, nlat: int, lon, lat):
+    """ 
+    Given nlon, nlat, lon, and lat
+    Return Geopandas DataFrame of grid points
+    """
+    x, y = np.meshgrid(range(nlon), range(nlat))
+    # assign 80-km grid points to geopandas dataframe
+    df = pd.DataFrame({"x": x.ravel(), "y": y.ravel()})
+    geometry = geopandas.points_from_xy(x=lon.ravel(), y=lat.ravel())
+    crs = ccrs.PlateCarree()
+    # Avoid pyproj.exceptions.CRSError: Invalid CRS input: <cartopy.crs.PlateCarree object
+    crs = "EPSG:4326" # had to switch after casper upgrade Oct 2023
+    grid = geopandas.GeoDataFrame(
+        df.set_index(["y", "x"]), geometry=geometry, crs=crs
+    )
+    return grid
+
+
 # gridded projection coordinates xv, yv
 xs = np.linspace( llx, urx, nlon)
 ys = np.linspace( lly, ury, nlat)
@@ -33,16 +54,47 @@ ll3 = ccrs.PlateCarree().transform_points(g211,xv,yv)
 lon = ll3[:,:,0]
 lat = ll3[:,:,1]
 
+def getmask(grid: geopandas.GeoDataFrame, nlon: int, nlat: int):
+    """
+    Given a grid Geopandas DataFrame, nlon, and nlat,
+    Return DataArray of True over CONUS False elsewhere
+    """
+    poly = geopandas.GeoDataFrame.from_file(
+        geopandas.datasets.get_path("naturalearth_lowres")
+    )
+    usa = poly[poly.iso_a3 == "USA"]
+
+    # lat/lon box around CONUS (no AK or HI)
+    lat_point_list = [51, 51, 20, 20, 51]
+    lon_point_list = [-130, -60, -60, -130, -130]
+    polygon_geom = Polygon(zip(lon_point_list, lat_point_list))
+    polygon = geopandas.GeoDataFrame(crs=usa.crs, geometry=[polygon_geom])
+    conus = geopandas.overlay(usa, polygon, how="intersection")
+
+    conus_mask = np.array(
+        [g.within(conus.geometry.values[0]) for g in grid.geometry]
+    )
+    conus_mask = xarray.DataArray(
+        conus_mask.reshape(nlat, nlon),
+        dims=["y","x"],
+        coords={"y": range(nlat), "x": range(nlon)},
+    )
+    return conus_mask
+
+grid = getgdf(nlon, nlat, lon, lat)
+
+# TODO: use getmask() instead of pickle file. results are different.
 mask = pickle.load(open('/glade/u/home/ahijevyc/HRRR/usamask_mod.pk', 'rb'))
 mask = xarray.DataArray(mask.reshape((nlat,nlon)), 
         coords=dict(y=range(nlat), x=range(nlon)), dims=["y","x"])
 
-# TODO: clean up this kludge
-class x2():
+
+
+class x2:
     """
-    Half spacing compared to G211
+    Half grid spacing of G211
     """
-    global ll_lon, ll_lat, ur_lon, ur_lat
+    global llx, lly, urx, ury
     def __init__(self):
         nlon = 93 * 2 - 1 
         nlat = 65 * 2 - 1 # subtract 1 to line up with 80 km grid (started Sep 19 2023)
@@ -60,7 +112,7 @@ class x2():
 
         self.nlon = nlon
         self.nlat = nlat
-        self.width = nlon
-        self.height = nlat
         self.lon = lon
         self.lat = lat
+        self.grid = getgdf(nlon, nlat, lon, lat)
+        self.mask = getmask(self.grid, nlon, nlat)
