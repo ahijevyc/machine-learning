@@ -296,9 +296,11 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
                 f'reading {ifile} {os.path.getsize(ifile)/1024**3:.1f}G '
                 f'mtime {time.ctime(os.path.getmtime(ifile))} '
                 f'{len(feature_list)} features {len(args.labels)} labels '
-                f'and {len(index_cols)} index_cols'
+                f'and {len(index_cols)} index_cols & dropna.'
                 )
-        df = pd.read_parquet(ifile, engine="pyarrow", columns=columns)
+        # tacking on dropna was 20% faster than doing it separately afterwards.
+        df = pd.read_parquet(ifile, engine="pyarrow", columns=columns).dropna()
+
         return df
 
     # copied and pasted from dask_HRRR_read.ipynb after testing - Aug 29, 2023
@@ -437,7 +439,19 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
     df.to_parquet(ifile)
 
     # Saved all columns to parquet, but only return columns subset.
-    return df[columns]
+    df = df[columns]
+
+    # Used to test all columns for NA, but we only care about subset columns.
+    # For example, mode probs are not available for fhr=2 but we don't need to drop fhr=2 if
+    # the other features are complete.
+    # We don't want rptdist2bool to convert missing labels to Falses.
+    # Before Oct 20, 2023, it did. Now it asserts none are missing first.
+    logging.warning( f"Drop na")
+    beforedropna = len(df)
+    df = df.dropna()
+    logging.warning( f"kept {len(df)}/{beforedropna} {len(df)/beforedropna:.0%} rows")
+
+    return df
 
 
 def rptdist2bool(df, args):
@@ -450,10 +464,14 @@ def rptdist2bool(df, args):
     twin = args.twin 
     for rptdist in [20,40]:
         labels = args.labels
+        # Don't want any missing labels. They will be treated as False instead of NA when thresholded.
+        assert not df[labels].isna().any(axis=None), f'label(s) missing {df[labels].isna().any()}'
         lsrtypes = ["sighail", "sigwind", "hailone", "wind", "torn", "windmg", "svrwarn", "torwarn"]
         oldtwin = [0,1,2]
         logging.warning(f"use {oldtwin} time win for {len(lsrtypes)} lsrtypes until parquet renamed [1,2,4]") 
         label_cols = [f"{r}_rptdist_{t}hr" for r in lsrtypes for t in oldtwin]
+        label_cols = [x for x in label_cols if x in labels] # only keep those in labels
+
         # refer to new label names (with f"{rptdist}km" not f"rptdist")
         new_label_cols = [r.replace("rptdist", f"{rptdist}km") for r in label_cols]
         logging.info(
