@@ -666,6 +666,8 @@ def predct(i, args, df):
     Return DataFrame of predictions for this (ifold, thisfit).
     Used global variable features dataframe, df.
     Used by test_stormrpts_dnn.py and lightning_prob.ipynb.
+    Remove and use predct2 instead once you adapt lightning_prob.ipynb
+    to use predct2.
     """
     ifold, thisfit = i
     savedmodel = get_savedmodel_path(args)
@@ -714,6 +716,62 @@ def predct(i, args, df):
     Y = pd.DataFrame(Y, columns=labels, index=df_fold.index)
     return Y
 
+def predct2(i, args, df):
+    """
+    Return DataFrame of predictions and labels for this (ifold, thisfit).
+    Used global variable features dataframe, df.
+    Used by test_stormrpts_dnn.py and lightning_prob.ipynb.
+    """
+    ifold, thisfit = i
+    savedmodel = get_savedmodel_path(args)
+    savedmodel_thisfitfold = f"{savedmodel}_{thisfit}/{args.kfold}fold{ifold}"
+    logging.warning(f"{i} {savedmodel_thisfitfold}")
+    yl = yaml.load(open(
+        os.path.join(savedmodel_thisfitfold, "config.yaml"), "r"),
+        Loader=yaml.Loader)
+    if "labels" in yl:
+        labels = yl["labels"]
+        # delete labels so we can make DataFrame from rest of dictionary.
+        del (yl["labels"])
+    else:
+        labels = getattr(yl["args"], "labels")
+
+    assert configs_match(
+        yl["args"], args
+    ), f'this configuration {args} does not match yaml file {yl["args"]}'
+    del (yl["args"])
+    feature_list = get_features(args)
+    # scaling values DataFrame as from .describe()
+    sv = pd.DataFrame(yl).set_index("columns").T
+    if sv.columns.size != len(feature_list):
+        logging.error(
+            f"size of yaml and args feature list differ {sv.columns} {feature_list}"
+        )
+    assert all(
+        sv.columns == feature_list
+    ), f"columns {feature_list} don't match when model was trained {sv.columns}"
+
+    logging.info(f"loading {savedmodel_thisfitfold}")
+    model = load_model(
+        savedmodel_thisfitfold)
+    df_fold = df
+    if args.kfold > 1:
+        cv = KFold(n_splits=args.kfold)
+        # Convert generator to list. You don't want a generator.
+        # Generator depletes after first run of statjob, and if run serially,
+        # next time statjob is executed the entire fold loop is skipped.
+        cvsplit = list(cv.split(df))
+        itrain, itest = cvsplit[ifold]
+        df_fold = df.iloc[itest]
+    norm_features = (df_fold[feature_list] - sv.loc["mean"]) / sv.loc["std"]
+    # Grab numpy array of predictions.
+    y_preds = model.predict(norm_features.to_numpy(
+        dtype='float32'), batch_size=10000)
+    y_preds = pd.DataFrame(y_preds, columns=labels, index=df_fold.index)
+    # predictions (y_pred) and labels (y_label) as MultiIndex columns
+    Y = pd.concat([y_preds, df[labels]], axis=1, keys=["y_pred", "y_label"])
+
+    return Y
 
 
 def read_csv_files(sdate, edate, dataset, members=[str(x) for x in range(1,11)], columns=None):
