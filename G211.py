@@ -84,7 +84,7 @@ def getmask(grid: geopandas.GeoDataFrame, nlon: int, nlat: int):
 grid = getgdf(nlon, nlat, lon, lat)
 
 # TODO: use getmask() instead of pickle file. results are different.
-mask = pickle.load(open('/glade/u/home/ahijevyc/HRRR/usamask_mod.pk', 'rb'))
+mask = pickle.load(open('/glade/work/ahijevyc/NSC_objects/HRRR/usamask_mod.pk', 'rb'))
 mask = xarray.DataArray(mask.reshape((nlat,nlon)), 
         coords=dict(y=range(nlat), x=range(nlon)), dims=["y","x"])
 
