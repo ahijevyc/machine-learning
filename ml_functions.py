@@ -15,7 +15,9 @@ import time
 
 import dask.dataframe as ddf
 import hwtmode.statisticplot
+from itertools import repeat
 import matplotlib.pyplot as plt
+from multiprocessing import Pool
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -115,7 +117,7 @@ def configs_match(ylargs, args):
             f"training and testing time ranges overlap [{trainstart},{trainend}) [{teststart},{testend}]")
 
     # Comparing yaml config training period and requested training period (args) is not a good test
-    # because yaml config bounds are trimmed to actual range of training cases.
+    # because yaml config bounds are trimmed to actual available range of training cases.
     # config training period may be subset of the requested training period in args, but if any of the actual "trimmed" training period
     # beyond the range of the requested training period, this is a problem.
     # args.trainstart <= trainstart            trainend <= args.trainend
@@ -123,6 +125,8 @@ def configs_match(ylargs, args):
         f"requested start of training period {args.trainstart} is after actual training period [{trainstart},{trainend}]")
     assert trainend <= args.trainend,     (
         f"requested end of training period {args.trainend} is before actual training period [{trainstart},{trainend}]")
+
+
     for key in ["batchnorm", "batchsize", "dropout", "epochs", "flash", "fhr", "kfold", "learning_rate", "model", "neurons",
                 "optimizer", "reg_penalty", "suite"]:
         assert getattr(ylargs, key) == getattr(
@@ -204,7 +208,7 @@ def get_argparser():
 
 def full_cmd(args):
     """
-    Given a argparse Namespace, reverse engineer the string of arguments that would create it. 
+    Given a argparse Namespace, reverse engineer the string of arguments that would create it.
     String is suitable for shell command line.
     Format datetimes as strings.
     Just print keyword if its value is Boolean and True.
@@ -506,7 +510,7 @@ def rptdist2bool(df, args):
     """
     Derive "any" severe storm report label
     Return DataFrame with storm report distances and flash counts converted to Boolean.
-    These columns have new names that include distance and time window. 
+    These columns have new names that include distance and time window.
     """
 
     twin = args.twin
@@ -680,7 +684,7 @@ def upscale(field, nngridpts, type='mean', maxsize=27):
 
 
 def get_features(args):
-    feature_list_file = f"predictor_suites/{args.model}.{args.suite}.txt"
+    feature_list_file = f"/glade/work/ahijevyc/NSC_objects/predictor_suites/{args.model}.{args.suite}.txt"
 
     # Defined list of features in this function before Nov 24, 2022. But these 33 predictors were missing from the default suite. They weren't even in my first commit to github.
     # Why did they disappear? Maybe when I accidentally deleted my work directory in Oct 2021.
@@ -802,30 +806,26 @@ def predct2(i, args, df):
     savedmodel = get_savedmodel_path(args)
     savedmodel_thisfitfold = f"{savedmodel}_{thisfit}/{args.kfold}fold{ifold}"
     logging.warning(f"{i} {savedmodel_thisfitfold}")
-    yl = yaml.load(open(
-        os.path.join(savedmodel_thisfitfold, "config.yaml"), "r"),
-        Loader=yaml.Loader)
-    if "labels" in yl:
-        labels = yl["labels"]
-        # delete labels so we can make DataFrame from rest of dictionary.
-        del (yl["labels"])
-    else:
-        labels = getattr(yl["args"], "labels")
+    yaml_file = os.path.join(savedmodel_thisfitfold, "config.yaml")
+    yl = yaml.load(open(yaml_file, "r"), Loader=yaml.Loader)
+
+    # pop `labels` item so we can make DataFrame from rest of dictionary.
+    labels = yl.pop("labels", getattr(yl["args"], "labels"))
 
     assert configs_match(
         yl["args"], args
-    ), f'this configuration {args} does not match yaml file {yl["args"]}'
+    ), f'this configuration {args} does not match {yaml_file} {yl["args"]}'
     del (yl["args"])
     feature_list = get_features(args)
+    assert len(yl["columns"]) == len(
+        feature_list
+    ), f"size of yaml 'columns' and args feature_list differ {yl['columns']} {feature_list}"
+    assert (
+        yl["columns"] == feature_list
+    ), f"yaml 'columns' and args feature_list differ {yl['columns']} {feature_list}"
+
     # scaling values DataFrame as from .describe()
     sv = pd.DataFrame(yl).set_index("columns").T
-    if sv.columns.size != len(feature_list):
-        logging.error(
-            f"size of yaml and args feature list differ {sv.columns} {feature_list}"
-        )
-    assert all(
-        sv.columns == feature_list
-    ), f"columns {feature_list} don't match when model was trained {sv.columns}"
 
     logging.info(f"loading {savedmodel_thisfitfold}")
     model = load_model(
@@ -840,6 +840,9 @@ def predct2(i, args, df):
         itrain, itest = cvsplit[ifold]
         df_fold = df.iloc[itest]
     norm_features = (df_fold[feature_list] - sv.loc["mean"]) / sv.loc["std"]
+    # To avoid warning about about tf.function repeat tracing, set model.run_eagerly = True.
+    # Otherwise, if false, wrap in tf.function and run trace tf.graph for speedup.
+    model.run_eagerly = True
     # Grab numpy array of predictions.
     y_preds = model.predict(norm_features.to_numpy(
         dtype='float32'), batch_size=10000)
@@ -981,3 +984,61 @@ def get_savedmodel_path(args, odir="nn"):
     savedmodel += f"bs{args.batchsize}.{args.optimizer}.L2{args.reg_penalty}.lr{args.learning_rate}.dr{args.dropout}{batchnorm_str}"
 
     return savedmodel
+
+
+def get_flash_pred(
+    args: argparse.Namespace,
+    clobber=False,
+    levels = ["initialization_time", "valid_time", "y", "x"],
+    feature_levels = ["forecast_hour", "lat", "lon"],
+) -> pd.DataFrame:
+    """
+    Return DataFrame with DNN predictions and observed labels.
+    Save levels + feature_levels as levels in the returned MultiIndex.
+    These can be used to group and cut by feature values, like lat, lon,
+    forecast_hour, valid_time, initialization_time.
+    Columns in `levels` are removed from the columns.
+    Columns in `feature_levels` are preserved in the columns.
+    """
+
+    tmpdir = Path(os.getenv("TMPDIR"))
+    oypreds = tmpdir / f"Y.{args.flash:02d}+{args.twin}hr.{args.teststart}-{args.testend}.par"
+    if not clobber and os.path.exists(oypreds):
+        logging.warning(f"read saved model output {oypreds}")
+        Y = pd.read_parquet(oypreds)
+        logging.warning(f"done")
+    else:
+        df = load_df(args)
+        logging.warning(f"valid times: {df.valid_time.min()}-{df.valid_time.max()}")
+
+        logging.warning(f"Use valid times [{args.teststart},{args.testend}) for testing")
+        before_filtering = len(df)
+        idx = (args.teststart <= df.valid_time) & (df.valid_time < args.testend)
+        df = df[idx]
+        logging.warning(
+            f"kept {len(df)}/{before_filtering} "
+            f"{len(df)/before_filtering:.0%} cases in testing time window"
+        )
+
+        # Put "valid_time", "y", and "x" (and some features) in MultiIndex
+        # so we can group by them later.
+        # Used here and when calculating ensemble mean.
+        logging.warning(f"set_index {levels}")
+        df = df.set_index(levels)
+        # Append feature levels to index and retain as column.
+        logging.warning(f"set_index feature levels {feature_levels}")
+        df = df.set_index(feature_levels, drop=False, append=True)
+        levels += feature_levels
+
+        logging.warning(f"run model, save results to {oypreds}")
+        index = pd.MultiIndex.from_product(
+            [range(args.kfold), range(args.nfits)], names=["fold", "fit"]
+        )
+        # Remember to request multiple cpus and >600G memory when starting jupyter
+        with Pool(
+            processes=2
+        ) as pool:  # would like to use args.nfit but takes too much memory
+            result = pool.starmap(predct2, zip(index, repeat(args), repeat(df)))
+        Y = pd.concat(result, keys=index, names=index.names)
+        Y.to_parquet(oypreds)
+    return Y
