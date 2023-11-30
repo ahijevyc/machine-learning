@@ -18,6 +18,19 @@ def nns(ifile):
     ifile = ifile.replace(".scores.txt", "")
     return ifile
 
+def fhr(s):
+    """ given a numeric str return it
+    given a range, return mean
+    """
+    if s == "all":
+        return s
+    try:
+        s=int(s)
+        return s
+    except Exception as e:
+        start, end = s.lstrip("[").rstrip(")").split(",")
+        return np.mean([float(start), float(end)])
+
 
 def parse_args():
     # =============Arguments===================
@@ -32,12 +45,14 @@ def parse_args():
                         help="output resolution")
     parser.add_argument("-v", "--variable", type=str,
                         default="bss", help="variable to plot")
+    parser.add_argument("--lonbin", nargs="+",
+                        default=["all"], help="lon bin")
     parser.add_argument("--twin", nargs="+",
                         default=["1hr", "2hr", "4hr"], choices=["1hr", "2hr", "4hr"], help="time window")
     parser.add_argument("--rptdist", nargs="+",
                         default=["20km"], choices=["20km", "40km"], help="distance to report or event")
     parser.add_argument("--thresh", type=int, nargs="+",
-                        default=[10], help="flash threshold")
+                        default=[1], help="flash threshold")
     parser.add_argument("--ymax", type=float, default=0.54,
                         help="maximum on y-axis")
     parser.add_argument("--ymin", type=float, default=0.08,
@@ -109,8 +124,9 @@ def main():
     botax.xaxis.set_major_locator(ticker.MultipleLocator(2))
 
     logging.debug("keep numeric forecast_hours, drop individual fits")
+    dfs["forecast_hour"] = dfs["forecast_hour"].apply(fhr)
     dfs = dfs.loc[
-        dfs.forecast_hour.str.isnumeric() &
+        dfs.forecast_hour.ne("all") &
         (dfs.fit == "ensmean.all") &
         (dfs["class"].isin(args.classes))
     ]
@@ -120,6 +136,8 @@ def main():
     dfs = dfs.loc[dfs["time window"].isin(args.twin)]
     logging.info(f"kept {len(dfs)} twin={args.twin} lines")
     dfs = dfs.loc[dfs["flash threshold"].isin(args.thresh)]
+    logging.info(f"kept {len(dfs)} lonbin={args.lonbin} lines")
+    dfs = dfs.loc[dfs["lon_bin"].isin(args.lonbin)]
     logging.info(f"kept {len(dfs)} thresh={args.thresh} lines")
     dfs = dfs.loc[dfs["rptdist"].isin(args.rptdist)]
     logging.info(f"kept {len(dfs)} rptdist={args.rptdist} lines")
@@ -135,6 +153,8 @@ def main():
         ["any severe", "WeatherBug CG", "WeatherBug IC", "WeatherBug CG+IC", "GLM flash"], dfs[hue])
     # hue = "rptdist"
     # hue_order = ordered_intersection(["40km", "20km"], dfs[hue])
+    hue = "lon_bin"
+    hue_order = None
 
     style = "time window"
     style_order = ordered_intersection(["4hr", "2hr", "1hr"], dfs[style])
