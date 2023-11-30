@@ -37,7 +37,7 @@ def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], 
     # Compile model with optimizer and loss function. MSE is same as brier_score.
     loss = "binary_crossentropy"  # in HWT_mode, I used categorical_crossentropy
     optimizer = get_optimizer(optimizer_name, learning_rate=learning_rate)
-    model.compile(loss=loss, optimizer=optimizer, metrics=[
+    model.compile(loss=loss, optimizer=optimizer, run_eagerly=None, metrics=[
         MeanSquaredError(), AUC(), "accuracy"])
 
     return model
