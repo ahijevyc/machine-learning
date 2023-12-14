@@ -580,7 +580,8 @@ def get_glm(time_space_window, date=None, start=None, end=None, oneGLMfile=True)
             glmfiles, concat_dim="time", combine="nested")
     else:
         if oneGLMfile:
-            ifile = f"/glade/scratch/ahijevyc/temp/all{suffix}"
+            tmpdir = Path(os.getenv("TMPDIR"))
+            ifile = tmpdir / f"all{suffix}"
             if os.path.exists(ifile):
                 logging.info(f"open {ifile} for GLM flashes")
                 glm = xarray.open_dataset(ifile)
@@ -1002,7 +1003,7 @@ def get_flash_pred(
     """
 
     tmpdir = Path(os.getenv("TMPDIR"))
-    oypreds = tmpdir / f"Y.{args.flash:02d}+{args.twin}hr.{args.teststart}-{args.testend}.par"
+    oypreds = tmpdir / f"Y.{args.flash:03d}+{args.twin}hr.{args.teststart}-{args.testend}.par"
     if not clobber and os.path.exists(oypreds):
         logging.warning(f"read saved model output {oypreds}")
         Y = pd.read_parquet(oypreds)
@@ -1020,9 +1021,8 @@ def get_flash_pred(
             f"{len(df)/before_filtering:.0%} cases in testing time window"
         )
 
-        # Put "valid_time", "y", and "x" (and some features) in MultiIndex
+        # Put "initialization_time", "valid_time", "y", and "x" in MultiIndex
         # so we can group by them later.
-        # Used here and when calculating ensemble mean.
         logging.warning(f"set_index {levels}")
         df = df.set_index(levels)
         # Append feature levels to index and retain as column.
