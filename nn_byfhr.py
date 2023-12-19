@@ -28,6 +28,7 @@ def fhr(s):
         s=int(s)
         return s
     except Exception as e:
+        logging.info(e)
         start, end = s.lstrip("[").rstrip(")").split(",")
         return np.mean([float(start), float(end)])
 
@@ -37,7 +38,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="plot NN verification scores written by test_stormrpts_dnn.py, often in /glade/work/ahijevyc/NSC_objects/nn/.",
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('ifiles', nargs="+", type=str, help="input file(s)")
-    parser.add_argument("--classes", nargs="+", default=["flashes", "ic", "cg"],
+    parser.add_argument("--classes", nargs="+", default=["cg.ic"],
                         choices=["flashes", "ic", "cg", "cg.ic", "any"], help="classes")
     parser.add_argument("-d", "--debug", action="store_true",
                         help="turn on debug mode")
@@ -45,17 +46,16 @@ def parse_args():
                         help="output resolution")
     parser.add_argument("-v", "--variable", type=str,
                         default="bss", help="variable to plot")
-    parser.add_argument("--lonbin", nargs="+",
-                        default=["all"], help="lon bin")
+    parser.add_argument("--lonbin", nargs="+", help="lon bin")
     parser.add_argument("--twin", nargs="+",
                         default=["1hr", "2hr", "4hr"], choices=["1hr", "2hr", "4hr"], help="time window")
     parser.add_argument("--rptdist", nargs="+",
                         default=["20km"], choices=["20km", "40km"], help="distance to report or event")
     parser.add_argument("--thresh", type=int, nargs="+",
                         default=[1], help="flash threshold")
-    parser.add_argument("--ymax", type=float, default=0.54,
+    parser.add_argument("--ymax", type=float, default=0.64,
                         help="maximum on y-axis")
-    parser.add_argument("--ymin", type=float, default=0.08,
+    parser.add_argument("--ymin", type=float, default=0.04,
                         help="minimum on y-axis")
     args = parser.parse_args()
     return args
@@ -96,8 +96,8 @@ def main():
     dfs["fit"] = dfs["fit"] + "." + dfs["fold"]
     dfs = dfs.drop(columns="fold")
 
-    # extract flash count threshold
-    t = dfs["nn"].str.extract(r"\b(\d\d)+.*", expand=True).astype(int)
+    # extract flash count threshold (all digits between word boundary and plus sign)
+    t = dfs["nn"].str.extract(r"\b(\d+)\+.*", expand=True).astype(int)
     dfs["flash threshold"] = t
 
     # common prefix for nn
@@ -123,6 +123,10 @@ def main():
     botax = plt.subplot2grid((3, 1), (2, 0), rowspan=1, sharex=topax)
     botax.xaxis.set_major_locator(ticker.MultipleLocator(2))
 
+    
+    logging.warning("tossing forecast hour cuts (time ranges) TODO: handle these")
+    dfs = dfs[~dfs["forecast_hour"].str.startswith("[")]
+
     logging.debug("keep numeric forecast_hours, drop individual fits")
     dfs["forecast_hour"] = dfs["forecast_hour"].apply(fhr)
     dfs = dfs.loc[
@@ -136,9 +140,10 @@ def main():
     dfs = dfs.loc[dfs["time window"].isin(args.twin)]
     logging.info(f"kept {len(dfs)} twin={args.twin} lines")
     dfs = dfs.loc[dfs["flash threshold"].isin(args.thresh)]
-    logging.info(f"kept {len(dfs)} lonbin={args.lonbin} lines")
-    dfs = dfs.loc[dfs["lon_bin"].isin(args.lonbin)]
     logging.info(f"kept {len(dfs)} thresh={args.thresh} lines")
+    if args.lonbin is not None:
+        dfs = dfs.loc[dfs["lon_bin"].isin(args.lonbin)]
+        logging.info(f"kept {len(dfs)} lonbin={args.lonbin} lines")
     dfs = dfs.loc[dfs["rptdist"].isin(args.rptdist)]
     logging.info(f"kept {len(dfs)} rptdist={args.rptdist} lines")
     dfs["class"] = dfs["class"].str.replace("any", "any severe")
@@ -153,8 +158,8 @@ def main():
         ["any severe", "WeatherBug CG", "WeatherBug IC", "WeatherBug CG+IC", "GLM flash"], dfs[hue])
     # hue = "rptdist"
     # hue_order = ordered_intersection(["40km", "20km"], dfs[hue])
-    hue = "lon_bin"
-    hue_order = None
+    #hue = "lon_bin"
+    #hue_order = None
 
     style = "time window"
     style_order = ordered_intersection(["4hr", "2hr", "1hr"], dfs[style])
