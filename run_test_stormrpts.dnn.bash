@@ -9,7 +9,7 @@ fi
 
 i=0 # number each line of command file
 ncpus=6
-mem=299GB
+mem=433GB
 walltime=3:00:00
 
 echo read $cmdfile
@@ -30,11 +30,10 @@ do
 #PBS -S /bin/csh
 #PBS -j oe
 #PBS -l walltime=$walltime
-#PBS -l gpu_type=v100
 ## if casper htc is sitting in the queue for a while, try ngpus=1
 #PBS -l select=1:ncpus=${ncpus}:mem=$mem:ngpus=1
 #PBS -o $i.test.out
-#PBS -q casper
+#PBS -q main
 
 cd /glade/work/ahijevyc/NSC_objects
 

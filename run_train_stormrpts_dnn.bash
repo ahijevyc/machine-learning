@@ -13,7 +13,7 @@ cmdfile=cmds.txt
 
 echo read command file $cmdfile
 
-mem=160GB
+mem=240GB
 walltime=4:00:00
 gpu=":ngpus=1"
 
@@ -42,9 +42,8 @@ do
 #PBS -j oe
 #PBS -l walltime=$walltime
 #PBS -l select=1:ncpus=1${gpu}:mem=$mem
-#PBS -l gpu_type=v100
 #PBS -o $i.$fit.$fold.out
-#PBS -q casper
+#PBS -q main
 
 cd /glade/work/ahijevyc/NSC_objects
 
