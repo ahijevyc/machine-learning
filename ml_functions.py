@@ -397,21 +397,41 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
         wbugtimes = slice(earliest_valid_time,
                           latest_valid_time - pd.Timedelta(minutes=30))
         wbug = wbug.sel(time_coverage_start=wbugtimes)
-        # mean of 30-minute lightning in time window
+        # mean of 30-minute lightning blocks in time window
         # debug with ~ahijevyc/wbug_sum_time_window.ipynb
-        logging.info(f"sum weatherbug flashes in {twin}hr time window")
-        offset = pd.Timedelta(hours=twin/2) if twin == 1 else None
-        # resample requires non-overlapping time windows, but GLM's time windows overlap.
-        ltg_sum = wbug.resample(
-            time_coverage_start=f"{twin}H",
-            offset=offset,
-            skipna=True,
-        ).mean()*twin*2
-        # Valid time is half a time window after the start of the time window.
-        valid_time = ltg_sum.time_coverage_start.data + \
-            pd.Timedelta(hours=twin / 2)
-        ltg_sum = ltg_sum.assign_coords({"valid_time": (("time_coverage_start"), valid_time)}).swap_dims(
-            {"time_coverage_start": "valid_time"}
+        logging.info(f"sum weatherbug {rptdist}km flashes in {twin}hr time window")
+        ltg_sum = (
+            # If you shift with missing times, shifting by constant index is not constant in time.
+            # Therefore, resample at 30-min interval. fill in missing 30-minute times with nans
+            wbug.resample(time_coverage_start="30T")
+            .first()
+            .shift(time_coverage_start=-twin * 2 + 1) # deal with time_coverage_start, twin and offset
+            .rolling(
+                dim={"time_coverage_start": twin * 2},
+                min_periods=twin, # at least half times must be present
+            )
+            .mean()
+            * twin
+            * 2
+        )
+
+        if False:
+            # This was slow because dask's resample is inefficient
+            # https://github.com/pydata/xarray/discussions/5753
+            # It's also unneccessary.
+            logging.info("go from every half-hour to every hour")
+            # twin = 1 requires a 30 minute offset or valid_time will be on the half-hour
+            # instead of the top of the hour.
+            ltg_sum = ltg_sum.resample(
+                    time_coverage_start="1H",
+                    offset = "30T" if twin == 1 else None,
+                    ).first()
+
+        logging.info("valid_time=center of time window (twin/2 later than time_coverage_start)")
+        valid_time = ltg_sum.time_coverage_start.data + pd.Timedelta(hours=twin / 2)
+        ltg_sum = (
+            ltg_sum.assign_coords(valid_time=("time_coverage_start", valid_time))
+            .swap_dims({"time_coverage_start": "valid_time"})
         )
 
         # Append rptdist and twin strings to wbug variable names.
