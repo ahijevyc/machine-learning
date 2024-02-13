@@ -14,7 +14,6 @@ import sys
 import time
 
 import dask.dataframe as ddf
-import hwtmode.statisticplot
 from itertools import repeat
 import matplotlib.pyplot as plt
 from multiprocessing import Pool
@@ -155,7 +154,7 @@ def get_argparser():
                         help='fraction of neurons to drop in each hidden layer (0-1)')
     parser.add_argument('--epochs', default=30, type=int,
                         help="number of training epochs")
-    parser.add_argument('--labels', nargs="+", help="labels")
+    parser.add_argument('--labels', nargs="+", default = [], help="labels")
     parser.add_argument('--fhr', nargs="+", type=int, default=list(range(1, 49)), help="train with these forecast hours. Testing scripts only use this list to verify correct model "
                         "for testing; no filter applied to testing data. In other words you "
                         "test on all forecast hours in the testing data, regardless of whether the model was "
@@ -190,14 +189,14 @@ def get_argparser():
         '--savedmodel', help="filename of machine learning model")
     parser.add_argument('--seed', type=int, default=None,
                         help="random number seed for reproducability")
-    parser.add_argument(
-        '--trainend', type=lambda s: pd.to_datetime(s), help="training set end")
     parser.add_argument('--trainstart', type=lambda s: pd.to_datetime(s),
                         default="19700101", help="training set start")
-    parser.add_argument('--testend', type=lambda s: pd.to_datetime(s),
-                        default="20220101T00", help="testing set end")
+    parser.add_argument('--trainend', type=lambda s: pd.to_datetime(s),
+                        default="20220101", help="training set end")
     parser.add_argument('--teststart', type=lambda s: pd.to_datetime(s),
                         default="20201202T12", help="testing set start")
+    parser.add_argument('--testend', type=lambda s: pd.to_datetime(s),
+                        default="20220101", help="testing set end")
     parser.add_argument('--twin', type=int, default=2, choices=[
                         1, 2, 4], help="centered time window duration (plus/minus half this number)")
     parser.add_argument('--suite', default='default',
@@ -403,35 +402,17 @@ def load_df(args, idir="/glade/work/sobash/NSC_objects",
         ltg_sum = (
             # If you shift with missing times, shifting by constant index is not constant in time.
             # Therefore, resample at 30-min interval. fill in missing 30-minute times with nans
-            wbug.resample(time_coverage_start="30T")
+            wbug.resample(time_coverage_start="30min")
             .first()
-            .shift(time_coverage_start=-twin * 2 + 1) # deal with time_coverage_start, twin and offset
             .rolling(
                 dim={"time_coverage_start": twin * 2},
                 min_periods=twin, # at least half times must be present
+                center = True,
             )
             .mean()
+            .rename({"time_coverage_start" : "valid_time"})
             * twin
             * 2
-        )
-
-        if False:
-            # This was slow because dask's resample is inefficient
-            # https://github.com/pydata/xarray/discussions/5753
-            # It's also unneccessary.
-            logging.info("go from every half-hour to every hour")
-            # twin = 1 requires a 30 minute offset or valid_time will be on the half-hour
-            # instead of the top of the hour.
-            ltg_sum = ltg_sum.resample(
-                    time_coverage_start="1H",
-                    offset = "30T" if twin == 1 else None,
-                    ).first()
-
-        logging.info("valid_time=center of time window (twin/2 later than time_coverage_start)")
-        valid_time = ltg_sum.time_coverage_start.data + pd.Timedelta(hours=twin / 2)
-        ltg_sum = (
-            ltg_sum.assign_coords(valid_time=("time_coverage_start", valid_time))
-            .swap_dims({"time_coverage_start": "valid_time"})
         )
 
         # Append rptdist and twin strings to wbug variable names.
@@ -640,52 +621,6 @@ def get_glm(time_space_window, date=None, start=None, end=None, oneGLMfile=True)
     if glm.valid_time.size == 0:
         logging.warning(f"GLM Dataset is empty.")
     return glm
-
-
-def print_scores(obs, fcst, label, desc="", n_bins=10):
-
-    # print scores for this set of forecasts
-    # histogram of probability values
-    logging.debug(np.histogram(fcst, bins=n_bins))
-
-    # reliability curves
-    true_prob, fcst_prob = calibration_curve(obs, fcst, n_bins=n_bins)
-    for o, f in zip(true_prob, fcst_prob):
-        logging.info(o, f)
-
-    print('brier score', np.mean((obs-fcst)**2))
-
-    # BSS
-    bss_val = hwtmode.statisticplot.bss(obs, fcst)
-    print('bss', bss_val)
-
-    # ROC auc
-    auc = metrics.roc_auc_score(obs, fcst)
-    print('auc', auc)
-
-    # copied and pasted from ~ahijevyc/bin/reliability_curve_MET.py
-    """calibration curve """
-    fig_index = 1
-    fig = plt.figure(fig_index, figsize=(10, 7))
-    ax1 = plt.subplot2grid((3, 2), (0, 0), rowspan=2)
-    reld = hwtmode.statisticplot.reliability_diagram(
-        ax1, obs, fcst, label=label, n_bins=n_bins)
-    ax1.tick_params(axis='x', labelbottom=False)
-
-    """histogram of counts"""
-    ax2 = plt.subplot2grid((3, 2), (2, 0), rowspan=1, sharex=ax1)
-    histogram_of_counts = hwtmode.statisticplot.count_histogram(
-        ax2, fcst, label=label, n_bins=n_bins)
-    ROC_ax = plt.subplot2grid((3, 2), (0, 1), rowspan=2)
-    roc_curve = hwtmode.statisticplot.ROC_curve(
-        ROC_ax, obs, fcst, label=label, sep=0.1)
-    fineprint = f"{desc} {label}\ncreated {str(datetime.datetime.now(tz=None)).split('.')[0]}"
-    plt.annotate(text=fineprint, xy=(1, 1), xycoords=(
-        'figure pixels', 'figure pixels'), va="bottom", fontsize='xx-small')
-    ofile = Path(os.getenv('TMPDIR')) / f'{desc}.{label}.png'
-    plt.savefig(ofile)
-    print("made", ofile)
-    return true_prob, fcst_prob, bss_val, auc
 
 
 def upscale(field, nngridpts, type='mean', maxsize=27):
@@ -904,7 +839,7 @@ def read_csv_files(sdate, edate, dataset, members=[str(x) for x in range(1, 11)]
     if 'member' not in df.columns:
         logging.debug('adding members column')
         import re
-        member = [re.search("_mem(\d+)", s).groups()[0] for s in all_files]
+        member = [re.search(r"_mem(\d+)", s).groups()[0] for s in all_files]
         # repeat each element n times. where n is number of rows in a single file's dataframe
         # avoid ValueError: Length of values does not match length of index
         df['member'] = np.repeat(np.int8(member), len(df)/len(all_files))
@@ -1062,3 +997,38 @@ def get_flash_pred(
         Y = pd.concat(result, keys=index, names=index.names)
         Y.to_parquet(oypreds)
     return Y
+
+def get_args(
+        o_thresh, twin,
+        trainstart = "20191002",
+        trainend = "20201202",
+        teststart = "20201202",
+        testend = "20220101",
+        epoch = 30,
+        optim = "Adam",
+        ) -> argparse.Namespace:
+    """ return argparse.Namespace for ML model """
+    parser = get_argparser()
+    # use [0, 1, 2] time windows for ['sighail', 'sigwind', 'hailone', 'wind', 'torn']
+    # until we update parquet files with [1,2,4]
+    rpttwin = int(
+        np.floor(twin / 2)
+    )  # Ryan's original way of naming storm rpt time windows
+    args = parser.parse_args(
+        args=f"--seed -1 --model HRRR --batchsize 1024 --neurons 1024 --optim {optim} "
+        f"--trainstart {trainstart} --trainend {trainend} "
+        f"--teststart {teststart} --testend {testend} "
+        f"--flash {o_thresh} "
+        f"--twin {twin} "
+        f"--savedmodel /glade/work/ahijevyc/NSC_objects/nn/lightning/{o_thresh:03d}+.{twin}hr "
+        "--labels "
+        # f"sighail_{rptdist}km_{rpttwin}hr sigwind_{rptdist}km_{rpttwin}hr "
+        # f"hailone_{rptdist}km_{rpttwin}hr wind_{rptdist}km_{rpttwin}hr torn_{rptdist}km_{rpttwin}hr any_{rptdist}km_{rpttwin}hr "
+        f"cg_20km_{twin}hr ic_20km_{twin}hr cg.ic_20km_{twin}hr flashes_20km_{twin}hr "
+        f"cg_40km_{twin}hr ic_40km_{twin}hr cg.ic_40km_{twin}hr flashes_40km_{twin}hr "
+        "--batchnorm "
+        "--reg_penalty 0 "
+        f" --epoch {epoch} --learning 0.001 --kfold 1".split()
+    )
+
+    return args    
