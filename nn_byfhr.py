@@ -148,14 +148,14 @@ def main():
     logging.info(f"kept {len(dfs)} rptdist={args.rptdist} lines")
     dfs["class"] = dfs["class"].str.replace("any", "any severe")
     dfs["class"] = dfs["class"].str.replace(
-        "cg.ic", "WeatherBug CG+IC", regex=False)
-    dfs["class"] = dfs["class"].str.replace("cg", "WeatherBug CG")
-    dfs["class"] = dfs["class"].str.replace("ic", "WeatherBug IC")
+        "cg.ic", "ENTLN CG+IC", regex=False)
+    dfs["class"] = dfs["class"].str.replace("cg", "ENTLN CG")
+    dfs["class"] = dfs["class"].str.replace("ic", "ENTLN IC")
     dfs["class"] = dfs["class"].str.replace("flashes", "GLM flash")
     # Only put in hue_order elements that are in "class" column
     hue = "class"
     hue_order = ordered_intersection(
-        ["any severe", "WeatherBug CG", "WeatherBug IC", "WeatherBug CG+IC", "GLM flash"], dfs[hue])
+        ["any severe", "ENTLN CG", "ENTLN IC", "ENTLN CG+IC", "GLM flash"], dfs[hue])
     # hue = "rptdist"
     # hue_order = ordered_intersection(["40km", "20km"], dfs[hue])
     #hue = "lon_bin"
@@ -168,15 +168,18 @@ def main():
     size_order = ordered_intersection([1, 50], dfs[size])
 
     if len(size_order) == 1:
-        sizes = [3]
+        sizes = [4]
     else:
         sizes = [2, 4]
 
     sns.lineplot(data=dfs, x="forecast_hour", y=variable, ax=topax, marker="o",
                  hue=hue, style=style, sizes=sizes, size_order=size_order, size=size,
+                 markersize=2.4, markerfacecolor="white",
                  style_order=style_order, hue_order=hue_order)
+    topax.legend(loc="upper right", bbox_to_anchor=(0.83, 0.995))
     sns.lineplot(data=dfs, x="forecast_hour", y="base_rate", ax=botax, marker="o",
                  hue=hue, style=style, sizes=sizes, size_order=size_order, size=size,
+                 markersize=2.4, markerfacecolor="white",
                  style_order=style_order, hue_order=hue_order, legend=False)
     if args.ymin is not None:
         topax.set_ylim(bottom=args.ymin)
