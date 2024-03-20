@@ -59,11 +59,16 @@ def getmask(grid: geopandas.GeoDataFrame, nlon: int, nlat: int):
     Given a grid Geopandas DataFrame, nlon, and nlat,
     Return DataArray of True over CONUS False elsewhere
     """
-    poly = geopandas.GeoDataFrame.from_file(
-        geopandas.datasets.get_path("naturalearth_lowres")
-    )
-    usa = poly[poly.iso_a3 == "USA"]
+    gdf = geopandas.read_file("/glade/work/ahijevyc/share/shapeFiles/ne_110m_admin_0_countries")
+    usa = gdf[gdf["NAME"] == "United States of America"]
 
+    # get poly from gdf instead of depreciated geopandas.datasets
+
+    #poly = geopandas.GeoDataFrame.from_file(
+    #    geopandas.datasets.get_path("naturalearth_lowres")
+    #)
+    #usa_old = poly[poly.iso_a3 == "USA"]
+    
     # lat/lon box around CONUS (no AK or HI)
     lat_point_list = [51, 51, 20, 20, 51]
     lon_point_list = [-130, -60, -60, -130, -130]
