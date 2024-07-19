@@ -46,8 +46,8 @@ do
 #PBS -q main
 
 cd /glade/work/ahijevyc/NSC_objects
-
-conda activate tf2
+module load conda
+conda activate /glade/u/home/ahijevyc/miniconda3/envs/tf2
 
 python train_stormrpts_dnn.py --fits $fit --folds $fold $line 
 EOS
