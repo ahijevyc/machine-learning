@@ -10,15 +10,15 @@ import pdb
 import seaborn as sns
 import sys
 
-sns.set_theme()  # pretty axes background and gridlines
+#sns.set_theme()  # pretty axes background and gridlines
+sns.set_style("whitegrid")
 
-
-def nns(ifile):
+def nns(ifile:str) -> str:
     # abbreviate input file name for legend
     ifile = ifile.replace(".scores.txt", "")
     return ifile
 
-def fhr(s):
+def fhr(s:str):
     """ given a numeric str return it
     given a range, return mean
     """
@@ -69,7 +69,6 @@ def double(s):
     s[s == "0hr"] = "1hr"
     return s
 
-
 def main():
     args = parse_args()
     ifiles = args.ifiles
@@ -83,7 +82,7 @@ def main():
     logging.debug(args)
 
     # Figure dimensions
-    fig = plt.figure(figsize=(10, 7))
+    fig = plt.figure(figsize=(8, 6))
 
     logging.info(
         f"{len(ifiles)} input files into Pandas DataFrame, with new nn column equal to input filename")
@@ -118,25 +117,39 @@ def main():
         ["sighail", "sigwind", "hailone", "wind", "torn", "any"])
     dfs.loc[iseverestorm, "time window"] = double(
         dfs.loc[iseverestorm, "time window"])
+    dfs = dfs.rename(
+            columns={
+                "forecast_hour": "forecast hour",
+                "base_rate": "base rate",
+                "bss": "Brier Skill Score",
+                }
+            )
+    if variable == "bss":
+        variable = "Brier Skill Score"
 
     topax = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
+    topax.xaxis.set_major_locator(ticker.MultipleLocator(6))
+    # Secondary x axis on the top with UTC instead of forecast hour
+    topax2 = topax.secondary_xaxis("top")
+    topax2.xaxis.set_major_locator(ticker.MultipleLocator(12))
+    topax2.xaxis.set_major_formatter(lambda x, pos:f"{x%24:.0f}UTC")
     botax = plt.subplot2grid((3, 1), (2, 0), rowspan=1, sharex=topax)
-    botax.xaxis.set_major_locator(ticker.MultipleLocator(2))
 
     
     logging.warning("tossing forecast hour cuts (time ranges) TODO: handle these")
-    dfs = dfs[~dfs["forecast_hour"].str.startswith("[")]
+    dfs = dfs[~dfs["forecast hour"].str.startswith("[")]
 
-    logging.debug("keep numeric forecast_hours, drop individual fits")
-    dfs["forecast_hour"] = dfs["forecast_hour"].apply(fhr)
+    logging.debug("keep numeric forecast hours, drop individual fits")
+    dfs["forecast hour"] = dfs["forecast hour"].apply(fhr)
     dfs = dfs.loc[
-        dfs.forecast_hour.ne("all") &
+        dfs["forecast hour"].ne("all") &
         (dfs.fit == "ensmean.all") &
         (dfs["class"].isin(args.classes))
     ]
+    
     logging.info(
-        f"kept {len(dfs)} numeric forecast_hour, ensmean.all, class={args.classes} lines")
-    dfs["forecast_hour"] = dfs["forecast_hour"].astype(int)
+        f"kept {len(dfs)} numeric forecast hour, ensmean.all, class={args.classes} lines")
+    dfs["forecast hour"] = dfs["forecast hour"].astype(int)
     dfs = dfs.loc[dfs["time window"].isin(args.twin)]
     logging.info(f"kept {len(dfs)} twin={args.twin} lines")
     dfs = dfs.loc[dfs["flash threshold"].isin(args.thresh)]
@@ -161,30 +174,46 @@ def main():
     #hue = "lon_bin"
     #hue_order = None
 
-    style = "time window"
-    style_order = ordered_intersection(["4hr", "2hr", "1hr"], dfs[style])
+    
+    size = "time window"
+    size_order = ordered_intersection(["4hr", "2hr", "1hr"], dfs[size])
 
-    size = "flash threshold"
-    size_order = ordered_intersection([1, 50], dfs[size])
+    style = "flash threshold"
+    style_order = ordered_intersection([1, 50], dfs[style])
+    style=None
+    style_order=None
 
     if len(size_order) == 1:
         sizes = [4]
     else:
-        sizes = [2, 4]
+        sizes = [4, 2]
 
-    sns.lineplot(data=dfs, x="forecast_hour", y=variable, ax=topax, marker="o",
+
+    sns.lineplot(data=dfs, x="forecast hour", y=variable, ax=topax, marker="o",
                  hue=hue, style=style, sizes=sizes, size_order=size_order, size=size,
-                 markersize=2.4, markerfacecolor="white",
+                 markersize=1.9, markerfacecolor="white",
                  style_order=style_order, hue_order=hue_order)
-    topax.legend(loc="upper right", bbox_to_anchor=(0.83, 0.995))
-    sns.lineplot(data=dfs, x="forecast_hour", y="base_rate", ax=botax, marker="o",
+    topax.legend(loc="upper right", bbox_to_anchor=(0.6, 0.995))
+    sns.lineplot(data=dfs, x="forecast hour", y="base rate", ax=botax, marker="o",
                  hue=hue, style=style, sizes=sizes, size_order=size_order, size=size,
-                 markersize=2.4, markerfacecolor="white",
+                 markersize=1.9, markerfacecolor="white",
                  style_order=style_order, hue_order=hue_order, legend=False)
+
+
     if args.ymin is not None:
         topax.set_ylim(bottom=args.ymin)
     if args.ymax is not None:
         topax.set_ylim(top=args.ymax)
+    topax.set_xlim((0,48))
+
+    # don't show bottom panel if top panel already has base rate
+    if variable == "base rate":
+        topax.set_xlim((1,25))
+        botax.set_visible(False)
+
+    for x in range(0,48,24):
+        topax.axvspan(x, x+12, alpha=0.05, facecolor="black")
+        botax.axvspan(x, x+12, alpha=0.05, facecolor="black")
     #botax.set_ylim(bottom=0, top=0.09)
     ofile = f"{prefix}{variable}.{'.'.join([str(x) for x in args.thresh])}.{'.'.join(args.classes)}.{'.'.join(args.twin)}.png"
     plt.tight_layout()
