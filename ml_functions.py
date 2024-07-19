@@ -230,7 +230,7 @@ def get_argparser():
         help="number of neurons in each nn layer",
     )
     parser.add_argument(
-        "--nfits", type=int, default=5, help="number of times to fit (train) model"
+        "--nfits", type=int, default=10, help="number of times to fit (train) model"
     )
     parser.add_argument(
         "--nprocs", type=int, default=0, help="verify this many forecast hours in parallel"
@@ -260,7 +260,8 @@ def get_argparser():
     parser.add_argument(
         "--teststart",
         type=lambda s: pd.to_datetime(s),
-        default="20201202T12",
+        #default="20201202T12",
+        default="20210101",
         help="testing set start",
     )
     parser.add_argument(
@@ -372,7 +373,8 @@ def get_ifiles(args, idir):
             )
             # 2021 00z only
             # used to include 2022+ but they have no storm reports
-            search_str += f" {idir}/HRRR_new/grid_data/grid_data_HRRR_d01_2021*00-0000.par"
+            # added 2022 just for lightning
+            search_str += f" {idir}/HRRR_new/grid_data/grid_data_HRRR_d01_202[12]*00-0000.par"
         logging.info(f"ifiles search string {search_str}")
         ifiles = []
         for x in search_str.split(" "):
@@ -475,7 +477,7 @@ def load_df(
         wbug = wbug.sel(time_coverage_start=wbugtimes)
         # mean of 30-minute lightning blocks in time window
         # debug with ~ahijevyc/wbug_sum_time_window.ipynb
-        logging.info(f"sum weatherbug {rptdist}km flashes in {twin}hr time window")
+        logging.info(f"sum ENTLN {rptdist}km flashes in {twin}hr time window")
         ltg_sum = (
             # If you shift with missing times, shifting by constant index is not constant in time.
             # Therefore, resample at 30-min interval. fill in missing 30-minute times with nans
@@ -653,7 +655,7 @@ def get_glm(
             f"requested GLM time range [{start}-{end}] prior to first GLM day {firstglm}"
         )
     twin, rptdist = time_space_window
-    logging.info(f"get_glm: time/space window {twin}/{rptdist}")
+    logging.info(f"get_glm: time/space window {twin}/{rptdist} start={start} end={end}")
     suffix = f".glm_{rptdist}km_{twin}hr.nc"
     fmt = "%Y%m%d_%H%M"
     if date:
@@ -1091,7 +1093,7 @@ def get_args(
     twin: float,
     trainstart: str = "20191002",
     trainend: str = "20201202",
-    teststart: str = "20201202",
+    teststart: str = "20210101",
     testend: str = "20220101",
     epoch: int = 30,
     optim="Adam",
