@@ -1,12 +1,12 @@
-name: tf2
+name: tf
 channels:
   - conda-forge
   - defaults
+  - r
 dependencies:
   - tqdm
   - numpy
   - pandas
-  - netcdf4
   - cartopy
   - dask
   - ipywidgets
@@ -15,4 +15,20 @@ dependencies:
   - pyarrow
   - scikit-plot
   - geopandas
-prefix: /glade/u/home/ahijevyc/miniconda3/envs/tf2
+  - seaborn
+  - folium
+  - xarray
+  - ca-certificates
+  - certifi
+  - openssl
+  - urllib3
+  - zarr
+  - s3fs
+  - cftime
+  - netcdf4
+  - ipykernel
+  - metpy
+  - jupyterlab-git
+  - jupyterlab[version='<4']
+  - aiobotocore
+prefix: /glade/work/ahijevyc/conda-envs/tf
