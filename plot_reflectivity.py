@@ -35,7 +35,7 @@ def readNCLcm(name):
 
 def plot_reflectivity():
     awips = Basemap(projection='lcc', llcrnrlon=-133.459, llcrnrlat=12.19, urcrnrlon=-49.38641, urcrnrlat=57.2894, lat_1=25.0, lat_2=25.0, lon_0=-95, resolution='l', area_thresh=10000.)
-    fig, axes, m = pickle.load(open('rt2015_ch_CONUS.pk', 'rb'))
+    fig, axes, m = pickle.load(open('data/rt2015_ch_CONUS.pk', 'rb'))
     lons, lats = awips.makegrid(93, 65, returnxy=False)
   
     levels = [5,10,15,20,25,30,35,40,45,50,55,60,65,70]

@@ -98,7 +98,7 @@ def plot_forecast(predictions, prefix="", fhr=36):
 
     #fig, axes, m  = pickle.load(open('/glade/u/home/sobash/NSC_scripts/ch_pk_files/rt2015_ch_CONUS.pk', 'r'))
     #fig, axes, m  = pickle.load(open('/glade/u/home/sobash/NSC_scripts/dav_pk_files/rt2015_ch_CONUS.pk', 'rb'))
-    fig, axes, m = pickle.load(open('rt2015_ch_CONUS.pk', 'rb')) 
+    fig, axes, m = pickle.load(open('data/rt2015_ch_CONUS.pk', 'rb')) 
 
     lats, lons = predictions['lat'].values, predictions['lon'].values
     x, y = m(lons, lats)

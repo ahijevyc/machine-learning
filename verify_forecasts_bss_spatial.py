@@ -260,7 +260,7 @@ def smooth_gridded_forecast(predictions_gridded):
 def plot_bss_spatial(data2d, fname='bss_spatial.png'):
     ### PLOT bss ###
     awips = Basemap(projection='lcc', llcrnrlon=-133.459, llcrnrlat=12.19, urcrnrlon=-49.38641, urcrnrlat=57.2894, lat_1=25.0, lat_2=25.0, lon_0=-95, resolution='l', area_thresh=10000.)
-    fig, axes, m = pickle.load(open('rt2015_ch_CONUS.pk', 'rb'))
+    fig, axes, m = pickle.load(open('data/rt2015_ch_CONUS.pk', 'rb'))
     lons, lats = awips.makegrid(93, 65, returnxy=False)
 
     x, y = m(lons, lats)
@@ -289,7 +289,7 @@ def plot_bss_spatial(data2d, fname='bss_spatial.png'):
 
 def plot_forecast(data2d, fname='forecast.png'):
     awips = Basemap(projection='lcc', llcrnrlon=-133.459, llcrnrlat=12.19, urcrnrlon=-49.38641, urcrnrlat=57.2894, lat_1=25.0, lat_2=25.0, lon_0=-95, resolution='l', area_thresh=10000.)
-    fig, axes, m = pickle.load(open('rt2015_ch_CONUS.pk', 'rb'))
+    fig, axes, m = pickle.load(open('data/rt2015_ch_CONUS.pk', 'rb'))
     lons, lats = awips.makegrid(93, 65, returnxy=False)
 
     x, y = m(lons, lats)
@@ -331,7 +331,7 @@ def plot_forecast_old(predictions, prefix="", fhr=36):
 
     #fig, axes, m  = pickle.load(open('/glade/u/home/sobash/NSC_scripts/ch_pk_files/rt2015_ch_CONUS.pk', 'r'))
     #fig, axes, m  = pickle.load(open('/glade/u/home/sobash/NSC_scripts/dav_pk_files/rt2015_ch_CONUS.pk', 'rb'))
-    fig, axes, m = pickle.load(open('rt2015_ch_CONUS.pk', 'rb'))
+    fig, axes, m = pickle.load(open('data/rt2015_ch_CONUS.pk', 'rb'))
 
     lats, lons = predictions['lat'].values, predictions['lon'].values
     x, y = m(lons, lats)
