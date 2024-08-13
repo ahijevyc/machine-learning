@@ -23,7 +23,7 @@ import xarray
 
 def get_closest_gridbox():
     ### find closest 3-km or 1-km grid point to each 80-km grid point
-    gpfname = f'{odir}/NSC_objects/nngridpts_80km_{model}.pk'
+    gpfname = f'{odir}/NSC_objects/data/nngridpts_80km_{model}.pk'
     nngridpts = pickle.load(open(gpfname, 'rb'), encoding='bytes')
     return nngridpts
 

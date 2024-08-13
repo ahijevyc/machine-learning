@@ -80,14 +80,14 @@ f.close()
 
 # find closest 3-km or 1-km grid point to each 80-km grid point
 print('finding closest grid points')
-gpfname = 'nngridpts_80km_%s'%model
+gpfname = 'data/nngridpts_80km_%s'%model
 if os.path.exists(gpfname):
     nngridpts = pickle.load(open(gpfname, 'rb'))
 else:
     xy = awips(lons.ravel(), lats.ravel())
     tree = spatial.KDTree(list(zip(xy[0].ravel(),xy[1].ravel())))
     nngridpts = tree.query(list(zip(x81.ravel(),y81.ravel())))
-    pickle.dump(nngridpts, open('nngridpts_80km_%s'%model, 'wb'))
+    pickle.dump(nngridpts, open(gpfname, 'wb'))
 
 upscaled_fields = { 'UP_HELI_MAX':[], 'UP_HELI_MAX03':[], 'UP_HELI_MAX01':[], 'W_UP_MAX':[], 'W_DN_MAX':[], 'WSPD10MAX':[], 'STP':[], 'LR75':[], 'CAPESHEAR':[],
            'MUCAPE':[], 'SBCAPE':[], 'SBCINH':[], 'MLCINH':[], 'MLLCL':[], 'SHR06': [], 'SHR01':[], 'SRH01':[], 'SRH03':[], 'T2':[], 'TD2':[], 'PSFC':[], 'PREC_ACC_NC':[], \
