@@ -9,7 +9,7 @@ fi
 
 fit=$1
 
-cmdfile=cmds.txt
+cmdfile=data/cmds.txt
 
 echo read command file $cmdfile
 

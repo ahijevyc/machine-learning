@@ -16,7 +16,7 @@ import sys
 if len(sys.argv) >= 2:
     ifile = sys.argv[1]
 else:
-    ifile = "cmds.txt"
+    ifile = "data/cmds.txt"
 cmds = open(ifile,"r").readlines()
 
 odir = "nn"
@@ -24,7 +24,7 @@ odir = "nn"
 if len(sys.argv) >= 3:
     odir = sys.argv[2]
 
-c = f"missing_model_cmds.txt"
+c = f"data/missing_model_cmds.txt"
 if os.path.exists(c):
     logging.warning(f"removing {c}")
     os.remove(c)

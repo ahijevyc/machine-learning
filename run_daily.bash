@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cmdfile=cmds.txt
+cmdfile=data/cmds.txt
 
 if [ $# -eq 1 ] ; then
     cmdfile=$1
