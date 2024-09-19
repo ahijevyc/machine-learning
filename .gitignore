@@ -1,0 +1,7 @@
+*.csv
+*.png
+*.pk
+*.h5
+data/
+rf/
+*.pdf
