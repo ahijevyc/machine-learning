@@ -7,3 +7,6 @@ rf/
 *.pdf
 .ipynb_checkpoints/
 hide/
+__pycache__/
+nn/mode_handlabels
+nn/hyperparam_search.HRRR
