@@ -5,3 +5,5 @@
 data/
 rf/
 *.pdf
+.ipynb_checkpoints/
+hide/
