@@ -25,6 +25,9 @@ def get_argparser():
     parser.add_argument('center', help="center of accumation time window")
     parser.add_argument('twin', type=float, help="total width of accumulation time window in hours")
     parser.add_argument("--clobber", action='store_true', help="clobber existing file(s)")
+    parser.add_argument("--maxbad", type=int, default=0, help= (
+        "maximum number of corrupt or missing GLM 20-second files in time window to return a file"
+    )
     parser.add_argument('--pool', type=int, default=18, help="workers in pool")
     parser.add_argument("-d", "--debug", action='store_true')
     parser.add_argument("--odir", default="/glade/campaign/mmm/parc/ahijevyc/GLM", help="output path")
@@ -87,24 +90,21 @@ def main():
     Accumulate on G211 grid (40km) and half-spacing grid (20km).
 
     Allow some missing data in the twin-hr window.
-    The maximum number of missing files (maxbad) 
-    is equal to the time window in 
-    hours. There are 180 files per hour, so 1/180 = 0.6% can be missing.
+    For example, the maximum number of missing files (maxbad) 
+    could be equal to the time window in hours. There are 180 files per hour, so 1/180 = 0.6% can be missing.
     If there are more bad files than maxbad, then output file is not created. 
     """
 
     parser = get_argparser()
     args = parser.parse_args()
     clobber = args.clobber
-    debug = args.debug
-    pool = args.pool
     twin = args.twin
     center = pd.to_datetime(args.center)
     start = center - datetime.timedelta(hours=twin/2)
     end   = center + datetime.timedelta(hours=twin/2)
     odir = os.path.join(args.odir, center.strftime('%Y'))
 
-    if debug:
+    if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
     bucket = "noaa-goes16"
@@ -135,7 +135,7 @@ def main():
     if os.path.exists(ofile) and not clobber:
         logging.warning(f"found {ofile} skipping.")
     else:
-        flashes = accum_on_grid(level2, G211.lon, G211.lat, maxbad=int(twin), pool=pool)
+        flashes = accum_on_grid(level2, G211.lon, G211.lat, maxbad=args.maxbad, pool=args.pool)
         saveflashes(flashes, center, attrs, ofile)
 
     # Now do half-distance grid (half the 40km half-grid spacing of G211)
@@ -145,7 +145,7 @@ def main():
     else:
         grid = G211.x2()
         lon, lat = grid.lon, grid.lat
-        flashes = accum_on_grid(level2, lon, lat, maxbad=int(twin), pool=pool)
+        flashes = accum_on_grid(level2, lon, lat, maxbad=args.maxbad, pool=args.pool)
         saveflashes(flashes, center, attrs, ofile)
 
 def saveflashes(flashes, center, attrs, ofile):
