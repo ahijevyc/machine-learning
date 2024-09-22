@@ -405,7 +405,7 @@ def get_ifiles(args, idir):
 def load_df(
         args: argparse.Namespace,
         idir: str ="/glade/work/sobash/NSC_objects",
-        wbugdir: str ="/glade/campaign/mmm/parc/ahijevyc/wbug_lightning",
+        wbugdir: str ="/glade/campaign/mmm/parc/ahijevyc/ENTLN",
         index_cols: Iterable =["initialization_time", "valid_time", "y", "x"],
 ):
     """
@@ -465,22 +465,30 @@ def load_df(
     df["Local_Solar_Hour_sin"] = np.sin(Local_Solar_Hour * 2 * np.pi / 24)
     df["Local_Solar_Hour_cos"] = np.cos(Local_Solar_Hour * 2 * np.pi / 24)
 
-    # weatherbug cg, ic lightning in rptdist = 20km and 40km grids
+    # Earth Networks Total Lightning Network (ENTLN)
+    # Previously Weatherbug.
+    # cg, ic lightning in rptdist = 20km and 40km grids
     # Counts begin in 30-minute bins
-    wbug_dict = {}
+    ENTLN_dict = {}
     for rptdist in [20, 40]:
         iwbug = os.path.join(wbugdir, f"flash.{rptdist}km_30min.nc")
-        logging.info(f"load wbug lightning data {iwbug}")
+        logging.info(f"load ENTLN lightning data {iwbug}")
         wbug = xarray.open_dataset(iwbug, chunks={"time_coverage_start": 270})
         wbug["cg.ic"] = wbug.cg + wbug.ic
         wbugtimes = slice(earliest_valid_time, latest_valid_time - pd.Timedelta(minutes=30))
         wbug = wbug.sel(time_coverage_start=wbugtimes)
         # mean of 30-minute lightning blocks in time window
-        # debug with ~ahijevyc/wbug_sum_time_window.ipynb
+        # debug with notebooks/ENTLN_sum_time_window.ipynb
         logging.info(f"sum ENTLN {rptdist}km flashes in {twin}hr time window")
         ltg_sum = (
-            # If you shift with missing times, shifting by constant index is not constant in time.
-            # Therefore, resample at 30-min interval. fill in missing 30-minute times with nans
+            # If you use xr.DataArray.shift() or .rolling() on a time series with dimension time_coverage_start,
+            # the time shift or time window varies unless time_coverage_start is evenly spaced with no missing times.
+            # Therefore, resample every 30 minutes, using a missing value for the count if the time is missing. 
+            # Missing times are filled in, but given a missing value (nan). Therefore the rolling window
+            # always has a duration of twin*2 hours.
+            # We take the .mean in the rolling time window, requiring at least min_periods=twin time_coverage_starts
+            # with non-missing counts. We set center=True so the .rolling window is centered on the time dimension
+            # and we rename the time dimension `valid_time`. Then multiply by the time window duration twin*2 hours to get a count.
             wbug.resample(time_coverage_start="30min")
             .first()
             .rolling(
@@ -494,31 +502,34 @@ def load_df(
             * 2
         )
 
-        # Append rptdist and twin strings to wbug variable names.
+        # Append rptdist and twin strings to ENTLN variable names.
         name_dict = {s: f"{s}_{rptdist}km_{twin}hr" for s in ["cg", "ic", "cg.ic"]}
         logging.info(f"rename {name_dict}")
         ltg_sum = ltg_sum.rename(name_dict)
-        logging.info(f"add rptdist={rptdist}km to wbug_dict")
-        wbug_dict[rptdist] = ltg_sum
+        logging.info(f"add rptdist={rptdist}km to ENTLN_dict")
+        ENTLN_dict[rptdist] = ltg_sum
 
-    # map rptdist=20km lightning count to nearest rptdist=40km grid point
-    lats = G211.x2().lat.ravel()
-    lons = G211.x2().lon.ravel()
-    x = G211.lon.ravel()
-    y = G211.lat.ravel()
-    tree = spatial.KDTree(list(zip(lons, lats)))
-    dist, indices = tree.query(list(zip(x, y)))
-    ltg_sum_coarse = wbug_dict[20].stack(pt=("y", "x")).isel(pt=indices)
+    # At each G211 point, assign ENTLN_dict[20] at nearest half-G211 point
+    lonsG211 = G211.lon.ravel()
+    latsG211 = G211.lat.ravel()
+    lonsG211x2 = G211.x2().lon.ravel()
+    latsG211x2 = G211.x2().lat.ravel()
+    tree = spatial.KDTree(list(zip(lonsG211x2, latsG211x2)))
+    dist, indices = tree.query(list(zip(lonsG211, latsG211)))
+    ltg_sum_coarse = ENTLN_dict[20].stack(pt=("y", "x")).isel(pt=indices)
 
-    logging.info("replace half-grid coordinates with full-grid coordinates")
+    # ltg_sum_coarse has lon and lat values of G211 
+    # but its x and y coordinates were iselected with pt=indices, so they 
+    # are not simply monotonic 0-92 and 0-64 like in G211 coords.
+    logging.info("update half-G211 y and x coordinates with full-G211 y and x coordinates")
     c = ltg_sum_coarse.coords
     c.update(G211.mask.stack(pt=("y", "x")).coords)
     ltg_sum_coarse = ltg_sum_coarse.assign_coords(c).unstack(dim="pt")
 
-    # Used to merge Wbug with HRRR here, but now I wait until I have GLM too.
-    # If either Wbug or GLM is present (and HRRR is present) we want to keep that time.
+    # Used to merge ENTLN with HRRR here, but now I wait until I have GLM too.
+    # If either ENTLN or GLM is present (and HRRR is present) we want to keep that time.
     # Before, if either was missing for a particular time, the whole time would be dropped
-    # because merge(how="inner") was used on a Wbug merge and a GLM merge.
+    # because merge(how="inner") was used on a ENTLN merge and a GLM merge.
 
     # Geostationary Lightning Mapper (GLM)
     glm40 = get_glm((twin, 40), start=earliest_valid_time, end=latest_valid_time)
@@ -539,7 +550,7 @@ def load_df(
 
     logging.info("merge wbug20, wbug40, glm20, glm40")
     all_ltg = xarray.merge(
-        [ltg_sum_coarse, wbug_dict[40], glm20, glm40], compat="override"
+        [ltg_sum_coarse, ENTLN_dict[40], glm20, glm40], compat="override"
     ).to_dataframe()
 
     # dask can't handle MultiIndex. use dask.dataframe.compute to convert from dask to
@@ -629,9 +640,9 @@ def rptdist2bool(df, args):
             logging.debug(f"derive {any_label_str} from {labels_this_twin}")
             df[any_label_str] = df[labels_this_twin].any(axis="columns")
 
-        # weatherbug flashes
+        # ENTLN (previously Weatherbug) flashes
         wbug_cols = [f"{f}_{rptdist}km_{twin}hr" for f in ["cg", "ic", "cg.ic"]]
-        logging.info(f"threshold wbug at {args.flash} flashes")
+        logging.info(f"threshold ENTLN at {args.flash} flashes")
         df[wbug_cols] = df[wbug_cols] >= args.flash
 
         # GLM flashes
@@ -1050,6 +1061,13 @@ def get_flash_pred(
 
     tmpdir = Path(os.getenv("TMPDIR"))
     oypreds = tmpdir / f"Y.{args.flash:03d}+{args.twin}hr.{args.teststart}-{args.testend}.par"
+
+    ifile = get_combined_parquet_input_file(args)
+    # clobber if combined parquet input file is newer than oypreds.
+    if os.path.exists(ifile) and os.path.getmtime(ifile) > os.path.getmtime(oypreds):
+        logging.warning(f"combined parquet input file {ifile} newer than oypreds {oypreds}; redo oypreds.")
+        clobber = True
+
     if not clobber and os.path.exists(oypreds):
         logging.warning(f"read saved model output {oypreds}")
         Y = pd.read_parquet(oypreds)

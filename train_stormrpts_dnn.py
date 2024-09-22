@@ -1,21 +1,23 @@
 import datetime
 import logging
-import matplotlib.pyplot as plt
-from ml_functions import Dumper, get_argparser, get_features, get_optimizer, load_df, rptdist2bool, get_savedmodel_path
-import numpy as np
 import os
-import pandas as pd
 import pdb
 import re
 import sys
+import yaml
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from sklearn.model_selection import KFold, GroupKFold, train_test_split
 import tensorflow as tf
 from tensorflow.keras.layers import Dropout, BatchNormalization
 from tensorflow.keras.metrics import MeanSquaredError, AUC
 from tensorflow.keras.regularizers import L2
-import visualizecv  # custom script by ahijevyc modified from sklearn web page
 import xarray
-import yaml
+from ml_functions import get_argparser, get_features, get_optimizer, load_df, rptdist2bool, get_savedmodel_path
+import visualizecv  # custom script by ahijevyc modified from sklearn web page
+
 
 def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], kernel_regularizer=None,
                    optimizer_name='Adam', dropout=0, batch_normalize=False, learning_rate=0.01):
@@ -205,7 +207,7 @@ def main():
                              std=sv.loc["std"].reindex(df.columns).to_list(),
                              labels=labels.columns.to_list(),
                              args=args,
-                             ), yfile) # , Dumper=Dumper)
+                             ), yfile)
 
 
 if __name__ == "__main__":
