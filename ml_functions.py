@@ -468,7 +468,7 @@ def load_df(
     # Earth Networks Total Lightning Network (ENTLN)
     # Previously Weatherbug.
     # cg, ic lightning in rptdist = 20km and 40km grids
-    # Counts begin in 30-minute bins
+    # Counts are in 30-minute bins labeled at the start of the bin.
     ENTLN_dict = {}
     for rptdist in [20, 40]:
         iwbug = os.path.join(wbugdir, f"flash.{rptdist}km_30min.nc")
@@ -516,15 +516,15 @@ def load_df(
     latsG211x2 = G211.x2().lat.ravel()
     tree = spatial.KDTree(list(zip(lonsG211x2, latsG211x2)))
     dist, indices = tree.query(list(zip(lonsG211, latsG211)))
-    ltg_sum_coarse = ENTLN_dict[20].stack(pt=("y", "x")).isel(pt=indices)
+    ENTLN20_coarse = ENTLN_dict[20].stack(pt=("y", "x")).isel(pt=indices)
 
-    # ltg_sum_coarse has lon and lat values of G211 
+    # ENTLN20_coarse has lon and lat values of G211 
     # but its x and y coordinates were iselected with pt=indices, so they 
     # are not simply monotonic 0-92 and 0-64 like in G211 coords.
     logging.info("update half-G211 y and x coordinates with full-G211 y and x coordinates")
-    c = ltg_sum_coarse.coords
+    c = ENTLN20_coarse.coords
     c.update(G211.mask.stack(pt=("y", "x")).coords)
-    ltg_sum_coarse = ltg_sum_coarse.assign_coords(c).unstack(dim="pt")
+    ENTLN20_coarse = ENTLN20_coarse.assign_coords(c).unstack(dim="pt")
 
     # Used to merge ENTLN with HRRR here, but now I wait until I have GLM too.
     # If either ENTLN or GLM is present (and HRRR is present) we want to keep that time.
@@ -533,24 +533,24 @@ def load_df(
 
     # Geostationary Lightning Mapper (GLM)
     glm40 = get_glm((twin, 40), start=earliest_valid_time, end=latest_valid_time)
-    glm20 = (
+    glm20_coarse = (
         get_glm((twin, 20), start=earliest_valid_time, end=latest_valid_time)
         .stack(pt=("y", "x"))
         .isel(pt=indices)
     )
 
-    # TODO: make sure glm40 and glm20 have same times, except for maybe the
+    # TODO: make sure glm40 and glm20_coarse have same times, except for maybe the
     # ragged end, where one might have been pre-processed with more available times.
 
-    c = glm20.coords
+    c = glm20_coarse.coords
     c.update(G211.mask.stack(pt=("y", "x")).coords)
     logging.info("assign_coords, unstack pt dim")
     # TODO: fix <__array_function__ internals>:200: RuntimeWarning: invalid value encountered in cast
-    glm20 = glm20.assign_coords(c).unstack(dim="pt")
+    glm20_coarse = glm20_coarse.assign_coords(c).unstack(dim="pt")
 
-    logging.info("merge wbug20, wbug40, glm20, glm40")
+    logging.info("merge ENTLN20_coarse, ENTLN40, glm20_coarse, glm40")
     all_ltg = xarray.merge(
-        [ltg_sum_coarse, ENTLN_dict[40], glm20, glm40], compat="override"
+        [ENTLN20_coarse, ENTLN_dict[40], glm20_coarse, glm40], compat="override"
     ).to_dataframe()
 
     # dask can't handle MultiIndex. use dask.dataframe.compute to convert from dask to
