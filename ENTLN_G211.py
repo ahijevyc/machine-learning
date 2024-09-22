@@ -1,4 +1,6 @@
 """ 
+This script puts flashes in 30 minute bins, and G211 grid (40km) and half-grid spacing G211 grid (20km).
+
 First got permission to read files from Wiebke and Dan.
 Give credit to Earth Networks in publications/presentations.
 Tarred and gzipped files in /gpfs/csfs1/ral/aap/hardt/LTG/.
@@ -6,7 +8,7 @@ Text file lines are either flashes or pulses. Pulses are components of a flash.
 Grep all flash lines (with the letter "f") to new txt file.
 Store in /glade/campaign/mmm/parc/ahijevyc/wbug_lightning/
 
-Convert text files to parquet with txt2par.py (one at a time).
+Convert text files to parquet with ENTLNtxt2par.py (one at a time).
 
 This script concatenates those parquet files (listed on command line) that
 hold individual unmapped flashes. It puts them in half-hourly bins and maps to grid.
@@ -15,9 +17,9 @@ Aggregate as many parquet files as practical before grouping by time to avoid ed
 The original txt files from which the parquet files were made had ragged temporal edges. 
 Flashes from the same hour could be split between different files. 
 
-python wbug_G211.py /glade/campaign/mmm/parc/ahijevyc/wbug_lightning/flash20*.par
+Usage:
+python ENTLN_G211.py /glade/campaign/mmm/parc/ahijevyc/ENTLN/flash20*.par
 
-This script puts flashes in 30 minute bins, and grids to G211 grid (40km) and half-grid spacing G211 grid (20km).
 """
 import datetime
 import dask.dataframe as dd
@@ -94,7 +96,7 @@ clobber = False
 logging.info(f"read {len(ifiles)} parquet files")
 df = dd.read_parquet(ifiles)
 
-# Sanity check. Should be okay because txt2par.py removed bad lines.
+# Sanity check. Should be okay because ENTLNtxt2par.py removed bad lines.
 time0 = pd.to_datetime("20180101")
 past = df["time"] < time0
 future = df["time"] >= datetime.datetime.utcnow()
