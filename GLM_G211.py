@@ -27,7 +27,8 @@ def get_argparser():
     parser.add_argument("--clobber", action='store_true', help="clobber existing file(s)")
     parser.add_argument("--maxbad", type=int, default=0, help= (
         "maximum number of corrupt or missing GLM 20-second files in time window to return a file"
-    )
+        )
+                        )
     parser.add_argument('--pool', type=int, default=18, help="workers in pool")
     parser.add_argument("-d", "--debug", action='store_true')
     parser.add_argument("--odir", default="/glade/campaign/mmm/parc/ahijevyc/GLM", help="output path")
@@ -110,10 +111,10 @@ def main():
     bucket = "noaa-goes16"
 
     logging.info(f"download data [{start},{end}]")
-    level2 = myglm.download(start, end, bucket=bucket, clobber=clobber)
-    assert level2 is not None, f"glm download {start} {end} {bucket} failed"
-    if len(level2) == 0:
-        logging.warning(f"no level2 files found")
+    list_of_level2_files = myglm.download(start, end, bucket=bucket, clobber=clobber)
+    assert list_of_level2_files is not None, f"glm download {start} {end} {bucket} failed"
+    if len(list_of_level2_files) == 0:
+        logging.error(f"no level2 files found")
         sys.exit(1)
 
     # make year directory
@@ -124,18 +125,22 @@ def main():
     # Global attributes of output netCDF file.
     attrs = G211.g211.proj4_params
     attrs.update(
-            dict(time_coverage_start=start.isoformat(), 
-                 time_coverage_center=center.isoformat(),
-                 time_coverage_end=end.isoformat(), 
-                 bucket=bucket)
-            )
+        dict(
+            time_coverage_start=start.isoformat(), 
+            time_coverage_center=center.isoformat(),
+            time_coverage_end=end.isoformat(), 
+            bucket=bucket,
+            maxbad=args.maxbad,
+            twin=twin,
+         )
+    )
 
 
     ofile = os.path.join(odir, center.strftime("%Y%m%d_%H%M") + f".glm_40km_{twin:.0f}hr.nc")
     if os.path.exists(ofile) and not clobber:
         logging.warning(f"found {ofile} skipping.")
     else:
-        flashes = accum_on_grid(level2, G211.lon, G211.lat, maxbad=args.maxbad, pool=args.pool)
+        flashes = accum_on_grid(list_of_level2_files, G211.lon, G211.lat, maxbad=args.maxbad, pool=args.pool)
         saveflashes(flashes, center, attrs, ofile)
 
     # Now do half-distance grid (half the 40km half-grid spacing of G211)
@@ -145,7 +150,7 @@ def main():
     else:
         grid = G211.x2()
         lon, lat = grid.lon, grid.lat
-        flashes = accum_on_grid(level2, lon, lat, maxbad=args.maxbad, pool=args.pool)
+        flashes = accum_on_grid(list_of_level2_files, lon, lat, maxbad=args.maxbad, pool=args.pool)
         saveflashes(flashes, center, attrs, ofile)
 
 def saveflashes(flashes, center, attrs, ofile):
