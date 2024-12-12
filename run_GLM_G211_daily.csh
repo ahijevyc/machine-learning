@@ -13,6 +13,7 @@ if ($yyyymmdd !~ 20[012][0-9][01][0-9][0-3][0-9]) then
    exit
 endif
 
+if (! $?TMPDIR) setenv TMPDIR /glade/derecho/scratch/ahijevyc/tmp
 set tmp=$TMPDIR/GLM_G211.$yyyymmdd.pbs
 
 cat <<EOS > $tmp
@@ -24,6 +25,7 @@ cat <<EOS > $tmp
 #PBS -k eod
 #PBS -l select=1:ncpus=20:mem=4GB,walltime=01:30:00
 
+module load conda
 conda activate glmval
 
 foreach h (\`seq -w 0 23\`)
