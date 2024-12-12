@@ -1060,7 +1060,7 @@ def get_flash_pred(
     """
 
     tmpdir = Path(os.getenv("TMPDIR"))
-    oypreds = tmpdir / f"Y.{args.flash:03d}+{args.twin}hr.{args.teststart}-{args.testend}.par"
+    oypreds = tmpdir / f"Y.{args.flash:03d}+{args.twin}hr.{args.teststart.strftime('%Y%m%d%H')}-{args.testend.strftime('%Y%m%d%H')}.par"
 
     ifile = get_combined_parquet_input_file(args)
     # clobber if combined parquet input file is newer than oypreds.
