@@ -28,7 +28,7 @@ def bss(obs, fcst):
 
 def reliability_diagram(ax, obs, fcst, thresh, n_bins=10, plabel=True, **kwargs):
     no_lines_yet = len(ax.get_lines()) == 0
-    if no_lines_yet:
+    if no_lines_yet and "no_perfect_line" in kwargs and not kwargs.pop("no_perfect_line"):
         ax.plot([0, 1], [0, 1], "k", alpha=0.5)
 
     for o_thresh in thresh:
@@ -59,35 +59,51 @@ def reliability_diagram(ax, obs, fcst, thresh, n_bins=10, plabel=True, **kwargs)
                     fontsize="xx-small",
                 )
 
-        noskill_line = ax.plot(
-            [0, 1],
-            [base_rate / 2, (1 + base_rate) / 2],
-            linewidth=0.3,
-            alpha=0.7,
-            label="",
-            color=s.get_color(),
-        )
-        baserateline = ax.axhline(
-            y=base_rate,
-            label=f"base rate {base_rate:.3f}",
-            linewidth=0.5,
-            linestyle="dashed",
-            dashes=(9, 9),
-            color=s.get_color(),
-        )
-        baserateline_vertical = ax.axvline(
-            x=base_rate,
-            linewidth=0.5,
-            linestyle="dashed",
-            dashes=(9, 9),
-            color=s.get_color(),
-        )
+        if no_lines_yet: # TODO: draw if base rate has changed
+            noskill_line = ax.plot(
+                [0, 1],
+                [base_rate / 2, (1 + base_rate) / 2],
+                linewidth=0.3,
+                alpha=0.7,
+                label="",
+                color="k",
+            )
+            x = 0.98
+            rotation = 24 #np.degrees(np.arctan2(ax.get_aspect()*0.5/1))
+            print(f"rot={rotation}")
+            ax.annotate(
+                "no skill line",
+                xy=(x, 0.5*x+base_rate/2),
+                xytext=(0,-2),
+                textcoords="offset points",
+                ha="right",
+                va="top",
+                rotation=rotation,
+                fontsize="xx-small",
+                color="k",
+            )
+            baserateline = ax.axhline(
+                y=base_rate,
+                label=f"base rate {base_rate:.3f}",
+                linewidth=0.5,
+                linestyle="dashed",
+                dashes=(9, 9),
+                color="k",
+            )
+            baserateline_vertical = ax.axvline(
+                x=base_rate,
+                linewidth=0.5,
+                linestyle="dashed",
+                dashes=(9, 9),
+                color="k",
+            )
 
     ax.set_xlabel(f"forecast prob. of {o_thresh}+ {obs.name}")
     ax.set_ylabel(f"obs. fraction of {o_thresh}+ {obs.name}")
     ax.set_title("(a) Reliability", loc="left")
     ax.legend(loc="upper left", fontsize="xx-small")
     ax.set_xlim((0, 1))
+    ax.set_ylim((0, 1))
 
     return ax
 
@@ -210,7 +226,7 @@ def pod(obs, fcst):
     return tp / (tp + fn) if tp + fn else np.nan
 
 
-def count_histogram(ax, fcst, n_bins=10, count_label=True):
+def count_histogram(ax, fcst, n_bins=10, count_label=True, **kwargs):
     """
     histogram of forecast probability
     """

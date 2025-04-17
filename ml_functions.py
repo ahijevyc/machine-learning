@@ -33,7 +33,7 @@ from tensorflow.keras import backend as K
 from tensorflow.keras import optimizers
 from tensorflow.keras.models import load_model
 
-import G211
+from ahijevyc import G211
 
 
 def assertclose(df, *c, lsuffix="", rsuffix="", atol=0.1):
