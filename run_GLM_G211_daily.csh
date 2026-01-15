@@ -23,7 +23,7 @@ cat <<EOS > $tmp
 #PBS -q casper@casper-pbs
 #PBS -j oe
 #PBS -k eod
-#PBS -l select=1:ncpus=20:mem=4GB,walltime=01:30:00
+#PBS -l select=1:ncpus=20:mem=8GB,walltime=01:30:00
 
 module load conda
 conda activate glmval

@@ -1,7 +1,7 @@
 import argparse
 import datetime
-import G211
-import glm as myglm
+from ahijevyc import G211
+from ahijevyc import glm as myglm
 from glmtools.io.glm import GLMDataset
 import logging
 import matplotlib.pyplot as plt
@@ -82,6 +82,13 @@ def accum_on_grid(ifiles, lon, lat, maxbad=0, pool=18):
     #flashes = flashes.astype(np.int32) # didn't reduce filesize
     flashes = xarray.DataArray(data=flashes, name="flashes", dims=["y","x"], 
             coords=dict(lon=(["y","x"],lon), lat=(["y","x"],lat)))
+    # specific unit strings CDO looks for
+    flashes.lat.attrs['units'] = 'degrees_north'
+    flashes.lon.attrs['units'] = 'degrees_east'
+
+    # standard_name to identify the axis type
+    flashes.lat.attrs['standard_name'] = 'latitude'
+    flashes.lon.attrs['standard_name'] = 'longitude'
     return flashes
 
 
@@ -108,7 +115,7 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    bucket = "noaa-goes16"
+    bucket = "noaa-goes19" # goes16 stopped GRB broadcast 4/7/2025
 
     logging.info(f"download data [{start},{end}]")
     list_of_level2_files = myglm.download(start, end, bucket=bucket, clobber=clobber)
