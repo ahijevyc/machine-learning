@@ -510,10 +510,12 @@ def load_df(
         ENTLN_dict[rptdist] = ltg_sum
 
     # At each G211 point, assign ENTLN_dict[20] at nearest half-G211 point
-    lonsG211 = G211.lon.ravel()
-    latsG211 = G211.lat.ravel()
-    lonsG211x2 = G211.x2().lon.ravel()
-    latsG211x2 = G211.x2().lat.ravel()
+    g211 = G211.GridManager(factor=1)
+    lonsG211 = g211.lon.ravel()
+    latsG211 = g211.lat.ravel()
+    g211x2 = G211.GridManager(factor=2)
+    lonsG211x2 = g211x2.lon.ravel()
+    latsG211x2 = g211x2.lat.ravel()
     tree = spatial.KDTree(list(zip(lonsG211x2, latsG211x2)))
     dist, indices = tree.query(list(zip(lonsG211, latsG211)))
     ENTLN20_coarse = ENTLN_dict[20].stack(pt=("y", "x")).isel(pt=indices)
@@ -523,7 +525,7 @@ def load_df(
     # are not simply monotonic 0-92 and 0-64 like in G211 coords.
     logging.info("update half-G211 y and x coordinates with full-G211 y and x coordinates")
     c = ENTLN20_coarse.coords
-    c.update(G211.mask.stack(pt=("y", "x")).coords)
+    c.update(g211.mask.stack(pt=("y", "x")).coords)
     ENTLN20_coarse = ENTLN20_coarse.assign_coords(c).unstack(dim="pt")
 
     # Used to merge ENTLN with HRRR here, but now I wait until I have GLM too.
@@ -543,7 +545,7 @@ def load_df(
     # ragged end, where one might have been pre-processed with more available times.
 
     c = glm20_coarse.coords
-    c.update(G211.mask.stack(pt=("y", "x")).coords)
+    c.update(g211.mask.stack(pt=("y", "x")).coords)
     logging.info("assign_coords, unstack pt dim")
     # TODO: fix <__array_function__ internals>:200: RuntimeWarning: invalid value encountered in cast
     glm20_coarse = glm20_coarse.assign_coords(c).unstack(dim="pt")

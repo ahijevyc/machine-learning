@@ -32,6 +32,8 @@ def get_argparser():
     parser.add_argument('--pool', type=int, default=18, help="workers in pool")
     parser.add_argument("-d", "--debug", action='store_true')
     parser.add_argument("--odir", default="/glade/campaign/mmm/parc/ahijevyc/GLM", help="output path")
+    parser.add_argument('-c', '--crd', action='store_true',  # syntax like ncks
+                        help="Include lat/lon coordinates in the output file")
     return parser
 
 def bincount(l2, tree, lon_range, lat_range, n):        
@@ -105,6 +107,7 @@ def main():
 
     parser = get_argparser()
     args = parser.parse_args()
+    include_coords = args.crd
     clobber = args.clobber
     twin = args.twin
     center = pd.to_datetime(args.center)
@@ -115,7 +118,10 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    bucket = "noaa-goes19" # goes16 stopped GRB broadcast 4/7/2025
+    bucket = "noaa-goes19"
+    # goes16 stopped GRB broadcast 4/7/2025
+    if start < pd.Timestamp("20250407"):
+        bucket = "noaa-goes16"
 
     logging.info(f"download data [{start},{end}]")
     list_of_level2_files = myglm.download(start, end, bucket=bucket, clobber=clobber)
@@ -130,7 +136,7 @@ def main():
         os.makedirs(odir)
 
     # Global attributes of output netCDF file.
-    attrs = G211.g211.proj4_params
+    attrs = {"projection": G211.G211.proj4_init}
     attrs.update(
         dict(
             time_coverage_start=start.isoformat(), 
@@ -147,24 +153,27 @@ def main():
     if os.path.exists(ofile) and not clobber:
         logging.warning(f"found {ofile} skipping.")
     else:
-        flashes = accum_on_grid(list_of_level2_files, G211.lon, G211.lat, maxbad=args.maxbad, pool=args.pool)
-        saveflashes(flashes, center, attrs, ofile)
+        grid = G211.GridManager(factor=1)
+        flashes = accum_on_grid(list_of_level2_files, grid.lon, grid.lat, maxbad=args.maxbad, pool=args.pool)
+        saveflashes(flashes, center, attrs, ofile, include_coords=include_coords)
 
     # Now do half-distance grid (half the 40km half-grid spacing of G211)
     ofile = os.path.join(odir, center.strftime("%Y%m%d_%H%M") + f".glm_20km_{twin:.0f}hr.nc")
     if os.path.exists(ofile) and not clobber:
         logging.warning(f"found {ofile} skipping.")
     else:
-        grid = G211.x2()
-        lon, lat = grid.lon, grid.lat
-        flashes = accum_on_grid(list_of_level2_files, lon, lat, maxbad=args.maxbad, pool=args.pool)
-        saveflashes(flashes, center, attrs, ofile)
+        grid = G211.GridManager(factor=2)
+        flashes = accum_on_grid(list_of_level2_files, grid.lon, grid.lat, maxbad=args.maxbad, pool=args.pool)
+        saveflashes(flashes, center, attrs, ofile, include_coords=include_coords)
 
-def saveflashes(flashes, center, attrs, ofile):
+def saveflashes(flashes, center, attrs, ofile, include_coords=False):
     flashes = flashes.expand_dims(time=[center])
     flashes.attrs.update(attrs)
-    logging.info(f"{flashes.sum().values} flashes over domain. max {flashes.values.max()} in one cell")
 
+    if not include_coords:
+        logging.info("Dropping lat/lon coords from output.")
+        flashes = flashes.drop_vars(['lat', 'lon'])
+    logging.info(f"{flashes.sum().values} flashes over domain. max {flashes.values.max()} in one cell")
     # Set encoding to minutes or hours since... or else it will be an integer number of days with no fraction. 
     flashes.time.encoding["units"] = "minutes since "+center.isoformat()
     flashes.encoding["zlib"] = True

@@ -84,7 +84,7 @@ def binflashes(df, grid_lon, grid_lat):
             )
     logging.info("merge cg and ic")
     ds = xarray.merge([cg,ic]).fillna(0) # replace missing values (nan) with zero
-    ds.attrs.update(G211.g211.proj4_params)
+    ds.attrs.update(G211.G211.proj4_params)
     for array in ds:
         ds[array].encoding["zlib"] = True
     return ds
