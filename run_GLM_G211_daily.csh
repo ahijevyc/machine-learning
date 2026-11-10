@@ -27,6 +27,8 @@ cat <<EOS > $tmp
 
 module load conda
 conda activate glmval
+# keep ~/.local (pandas 3, numpy 2.4 from a pip --user install) out of this env
+setenv PYTHONNOUSERSITE 1
 
 foreach h (\`seq -w 0 23\`)
     foreach twin (1 2 4)
