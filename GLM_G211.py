@@ -166,20 +166,69 @@ def main():
         flashes = accum_on_grid(list_of_level2_files, grid.lon, grid.lat, maxbad=args.maxbad, pool=args.pool)
         saveflashes(flashes, center, attrs, ofile, include_coords=include_coords)
 
+
 def saveflashes(flashes, center, attrs, ofile, include_coords=False):
     flashes = flashes.expand_dims(time=[center])
-    flashes.attrs.update(attrs)
+    
+    # 1. Convert to Dataset so we can add the projection variable
+    ds = flashes.to_dataset()
+
+    # 2. Create CF-compliant grid mapping variable (G211 Lambert Conformal)
+    ds['projection'] = xarray.DataArray(np.array('', dtype='S1'), dims=())
+    ds['projection'].attrs = {
+        'grid_mapping_name': 'lambert_conformal_conic',
+        'standard_parallel': [25.0, 25.0],
+        'longitude_of_central_meridian': -95.0,
+        'latitude_of_projection_origin': 39.0,
+        'false_easting': 0.0,
+        'false_northing': 0.0,
+        'semi_major_axis': 6378137.0,
+        'inverse_flattening': 298.257223563,
+        'proj4_params': attrs.get("projection", G211.G211.proj4_init)
+    }
+
+    # 3. Coordinate Attributes (Strict CF Requirements)
+    # Ensure x and y have standard names and axis types
+    if 'x' in ds.coords:
+        ds.x.attrs.update({'standard_name': 'projection_x_coordinate', 'axis': 'X', 'units': 'm'})
+    if 'y' in ds.coords:
+        ds.y.attrs.update({'standard_name': 'projection_y_coordinate', 'axis': 'Y', 'units': 'm'})
+    
+    ds.time.attrs.update({'standard_name': 'time', 'axis': 'T'})
+
+    ds['flashes'].attrs.update({
+        'grid_mapping': 'projection',
+        'coordinates': 'y x', # Space-separated list of coordinate names
+        'units': '1',         # '1' is the CF standard for 'count' or 'dimensionless'
+        'standard_name': 'lightning_flash_count' # A recognized (though custom here) standard name
+    })
+    
+    # 4. Cleanup and Global Attributes
+    ds.attrs.update(attrs)
+    ds.attrs['Conventions'] = 'CF-1.8'
 
     if not include_coords:
         logging.info("Dropping lat/lon coords from output.")
-        flashes = flashes.drop_vars(['lat', 'lon'])
-    logging.info(f"{flashes.sum().values} flashes over domain. max {flashes.values.max()} in one cell")
-    # Set encoding to minutes or hours since... or else it will be an integer number of days with no fraction. 
-    flashes.time.encoding["units"] = "minutes since "+center.isoformat()
-    flashes.encoding["zlib"] = True
-    # got about 20% compression with complevel=9 or default of 4.
-    #flashes.encoding["complevel"] = 9
-    flashes.to_netcdf(ofile,unlimited_dims=["time"])
+        ds = ds.drop_vars(['lat', 'lon'], errors='ignore')
+
+    logging.info(f"{ds.flashes.sum().values} flashes over domain. max {ds.flashes.values.max()} in one cell")
+
+    # 5. Strict Encoding (Forces int32 for both Flashes AND Time)
+    encoding = {
+        "flashes": {
+            "dtype": "int32",
+            "zlib": True,
+            "complevel": 4,
+            "_FillValue": -1
+        },
+        "time": {
+            "dtype": "int32",  # Forcing time to int32 as requested
+            "units": "minutes since " + center.strftime('%Y-%m-%d %H:%M:%S'),
+            "calendar": "proleptic_gregorian",
+        },
+    }
+
+    ds.to_netcdf(ofile, encoding=encoding, unlimited_dims=["time"])
     logging.info(f"created {ofile}")
 
 
