@@ -28,20 +28,27 @@ def bss(obs, fcst):
 
 def reliability_diagram(ax, obs, fcst, thresh, n_bins=10, plabel=True, **kwargs):
     no_lines_yet = len(ax.get_lines()) == 0
-    if no_lines_yet and "no_perfect_line" in kwargs and not kwargs.pop("no_perfect_line"):
+    # always remove no_perfect_line from kwargs, so it is never passed to ax.plot
+    no_perfect_line = kwargs.pop("no_perfect_line", False)
+    if no_lines_yet and not no_perfect_line:
         ax.plot([0, 1], [0, 1], "k", alpha=0.5)
 
+    thresh = list(thresh)
     for o_thresh in thresh:
         # calibration curve
         true_prob, fcst_prob = calibration_curve(obs >= o_thresh, fcst, n_bins=n_bins)
         bss_val = bss(obs >= o_thresh, fcst)
         print(f"{bss_val:.3f}")
         base_rate = (obs >= o_thresh).mean()  # base rate
+        # with more than one threshold, tell the lines apart in the legend
+        label = f"{fcst.name} bss:{bss_val:1.3f}"
+        if len(thresh) > 1:
+            label = f"{o_thresh}+ {label}"
         (s,) = ax.plot(
             fcst_prob,
             true_prob,
             "s-",
-            label=f"{fcst.name} bss:{bss_val:1.3f}",
+            label=label,
             **kwargs,
         )
         if plabel:
@@ -98,8 +105,10 @@ def reliability_diagram(ax, obs, fcst, thresh, n_bins=10, plabel=True, **kwargs)
                 color="k",
             )
 
-    ax.set_xlabel(f"forecast prob. of {o_thresh}+ {obs.name}")
-    ax.set_ylabel(f"obs. fraction of {o_thresh}+ {obs.name}")
+    # name the threshold in the axis labels only when there is one; otherwise it is in the legend
+    thresh_label = f"{thresh[0]}+ " if len(thresh) == 1 else ""
+    ax.set_xlabel(f"forecast prob. of {thresh_label}{obs.name}")
+    ax.set_ylabel(f"obs. fraction of {thresh_label}{obs.name}")
     ax.set_title("(a) Reliability", loc="left")
     ax.legend(loc="upper left", fontsize="xx-small")
     ax.set_xlim((0, 1))
