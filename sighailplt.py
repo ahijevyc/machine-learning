@@ -13,7 +13,7 @@ import pandas as pd # for forward fill of NaNs
 import pdb
 import pytz
 import re
-import spc
+from ahijevyc import spc
 import sys
 
 
