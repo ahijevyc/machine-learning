@@ -152,7 +152,7 @@ def main():
         df = pd.read_csv(mcd, parse_dates=["Run_Date","Valid_Date","labeltime"])
         df = df.sort_values("labeltime") # so you can pick first (or last) label of each storm
     else:
-        print(f"Use ~ahijevyc/bin/hagelslag_obj_pdf.py to make {mcd}")
+        print(f"Use /glade/work/ahijevyc/NSC_objects/hagelslag_obj_pdf.py to make {mcd}")
         sys.exit(1)
 
     df.info() # tried adding show_counts=True but got TypeError: info() got an unexpected keyword argument 'show_counts'
